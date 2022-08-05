@@ -1,0 +1,17 @@
+{
+  "title": "我的密码",
+  "config": {
+    "step": {
+      "user": {
+        "description": "",
+        "data": {
+          "require_admin": "仅管理员可见"
+        }
+      }
+    },
+    "error": {},
+    "abort": {
+      "single_instance_allowed": "仅允许单个配置."
+    }
+  }
+}
