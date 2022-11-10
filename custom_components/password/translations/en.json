@@ -5,7 +5,8 @@
       "user": {
         "description": "",
         "data": {
-          "require_admin": "仅管理员可见"
+          "require_admin": "仅管理员可见",
+          "key": "密钥"
         }
       }
     },

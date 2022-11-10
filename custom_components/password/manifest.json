@@ -1,7 +1,7 @@
 {
   "domain": "password",
   "name": "\u6211\u7684\u5BC6\u7801",
-  "version": "1.0.0",
+  "version": "2022.11.10",
   "config_flow": true,
   "documentation": "https://github.com/shaonianzhentan/password",
   "requirements": [],

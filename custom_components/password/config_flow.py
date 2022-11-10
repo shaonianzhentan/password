@@ -10,6 +10,7 @@ from .manifest import manifest
 
 DOMAIN = manifest.domain
 DATA_SCHEMA = vol.Schema({
+    vol.Required("key"): str,
     vol.Required("require_admin"): bool
 })
 
