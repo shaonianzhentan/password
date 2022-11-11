@@ -1,10 +1,12 @@
 {
   "domain": "password",
   "name": "\u6211\u7684\u5BC6\u7801",
-  "version": "2022.11.10",
+  "version": "2022.11.11",
   "config_flow": true,
   "documentation": "https://github.com/shaonianzhentan/password",
-  "requirements": [],
+  "requirements": [
+    "pyDes>=2.0.1"
+  ],
   "dependencies": [],
   "codeowners": [
     "@shaonianzhentan"
