@@ -17,27 +17,50 @@ class HttpView(HomeAssistantView):
         hass = request.app["hass"]
         server_key = hass.data.get(f'{manifest.domain}-key')
         helper = EncryptHelper(server_key, MAC_KEY)
-        return helper, server_key
+        return helper, server_key, hass
 
     async def get(self, request):
-        helper, server_key = self.get_helper(request)
+        helper, server_key, hass = self.get_helper(request)
 
         query = request.query
+        _type = query.get('type')
         key = query.get('key')
+        token = query.get('token')
 
         # 判断密钥是否匹配
-        if key != helper.md5(server_key + datetime.datetime.now().strftime('%Y%m%d%H')):
+        now = datetime.datetime.now()
+        if token != helper.md5(server_key + now.strftime('%Y%m%d%H')):
+            hass.loop.create_task(hass.services.async_call('persistent_notification', 'create', {
+                'title': '我的密码',
+                'message':  f'客户端{request.remote}【{now.strftime("%Y-%m-%d %H:%M:%S")}】登录失败'
+            }))
             return self.json_message("密钥错误", message_code='1')
 
-        _list = sd.load()
-        for item in _list:
-            item['key'] = helper.Decrypt(item['key'])
+        if _type == 'login':
+            return self.json_message("登录成功", message_code='0')
 
-        # 读取本地文件
-        return self.json({
-            'code': '0',
-            'data': _list
-        })
+        # 获取列表
+        if _type == 'list':
+            _list = sd.load()
+            return self.json({
+                'code': '0',
+                'data': map(lambda item: {
+                    'key': helper.Decrypt(item['key']),
+                    'title': item['title'],
+                    'category': item['category']
+                }, _list)
+            })
+
+        # 获取详情
+        if _type == 'info':
+            data = sd.get(key)
+            if data is None:
+                return self.json_message("未找到数据", message_code='1')
+            else:
+                data['key'] = helper.Decrypt(data['key'])
+                return self.json({ 'code': '0', 'data': data})
+
+        return self.json_message("未知错误", message_code='1')
 
     async def put(self, request):
         helper, server_key = self.get_helper(request)

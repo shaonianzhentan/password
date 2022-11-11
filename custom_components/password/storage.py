@@ -11,6 +11,13 @@ class StorageData():
         '''读取'''
         return load_json(self.file_path, [])
 
+    def get(self, key):
+        '''获取数据'''
+        result = self.load()
+        for item in result:
+            if item['key'] == key:
+                return item
+
     def add(self, data):
         '''添加'''
         result = self.load()
