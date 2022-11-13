@@ -56,7 +56,7 @@ class HomeAssistant {
      * @returns
      */
     async getList() {
-        const res = this.http('get', { type: 'list' })
+        const res = await this.http('get', { type: 'list' })
         res.data.reverse()
         return res
     }

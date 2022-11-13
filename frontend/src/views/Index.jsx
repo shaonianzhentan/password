@@ -58,7 +58,7 @@ export default function App() {
                         </ul>
                     </div>
                     <div className="form-control">
-                        <input type="text" placeholder="搜索..." onChange={e => search(e.target.value)} className="input input-bordered" />
+                        <input type="search" placeholder="搜索..." onChange={e => search(e.target.value)} className="input input-bordered" />
                     </div>
                 </div>
 
