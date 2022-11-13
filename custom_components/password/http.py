@@ -45,7 +45,7 @@ class HttpView(HomeAssistantView):
             return self.json({
                 'code': '0',
                 'data': list(map(lambda item: {
-                    'key': helper.Decrypt(item['key']),
+                    'key': item['key'],
                     'title': item['title'],
                     'category': item['category']
                 }, _list))
@@ -53,11 +53,11 @@ class HttpView(HomeAssistantView):
 
         # 获取详情
         if _type == 'info':
-            data = sd.get(helper.Encrypt(key))
+            data = sd.get(key)
             if data is None:
                 return self.json_message("未找到数据", message_code='1')
             else:
-                data['key'] = key
+                data['key'] = helper.Decrypt(key)
                 return self.json({ 'code': '0', 'data': data})
 
         return self.json_message("未知错误", message_code='1')
@@ -72,7 +72,8 @@ class HttpView(HomeAssistantView):
             'key': helper.Encrypt(key),
             'title': body.get('title'),
             'category': body.get('category'),
-            'text': body.get('text')
+            'text': body.get('text'),
+            'date': datetime.datetime.now().strftime('%Y-%m-%d')
         })
         return self.json_message("添加成功", message_code='0')
 
@@ -83,10 +84,11 @@ class HttpView(HomeAssistantView):
         key = body.get('key')
 
         sd.update({
-            'key': helper.Encrypt(key),
+            'key': key,
             'title': body.get('title'),
             'category': body.get('category'),
-            'text': body.get('text')
+            'text': body.get('text'),
+            'date': datetime.datetime.now().strftime('%Y-%m-%d')
         })
         return self.json_message("更新成功", message_code='0')
 
@@ -96,5 +98,5 @@ class HttpView(HomeAssistantView):
         query = request.query
         key = query.get('key')
         
-        sd.delete(helper.Encrypt(key))
+        sd.delete(key)
         return self.json_message("删除成功", message_code='0')

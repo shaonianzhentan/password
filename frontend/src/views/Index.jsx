@@ -16,7 +16,6 @@ export default function App() {
     useEffect(() => {
         ha.getList().then(res => {
             const { data } = res
-            data.sort((a, b) => a.key > b.key ? -1 : 1)
             setSource(data)
             setList(data)
         })

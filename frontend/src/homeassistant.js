@@ -55,8 +55,10 @@ class HomeAssistant {
      * 获取列表
      * @returns
      */
-    getList() {
-        return this.http('get', { type: 'list' })
+    async getList() {
+        const res = this.http('get', { type: 'list' })
+        res.data.reverse()
+        return res
     }
 
     /**
@@ -67,7 +69,7 @@ class HomeAssistant {
     async getInfo(key) {
         const res = await this.http('get', { type: 'info', key })
         const { data } = res
-        const helper = new EncryptHelper(key, sessionStorage[PASSWORD_KEY])
+        const helper = new EncryptHelper(data.key, sessionStorage[PASSWORD_KEY])
         data.text = helper.Decrypt(data.text)
         return data
     }
