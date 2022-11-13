@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import './Login.css';
 import ha from '../homeassistant'
 
@@ -18,6 +18,12 @@ function App() {
             top.alert("密钥错误！")
         }
     }
+
+    useEffect(() => {
+        if (sessionStorage['password-key']) {
+            location.hash = '#/index'
+        }
+    }, [])
 
     return (
         <div className="Login p-4">

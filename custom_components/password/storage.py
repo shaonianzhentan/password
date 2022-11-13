@@ -22,6 +22,7 @@ class StorageData():
         '''添加'''
         result = self.load()
         result.append(data)
+        save_json(self.file_path, result)
         return result
 
     def update(self, data):

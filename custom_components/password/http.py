@@ -2,7 +2,7 @@ import datetime
 from homeassistant.components.http import HomeAssistantView
 from .storage import StorageData
 from .manifest import manifest
-from .EncryptHelper import EncryptHelper
+from .EncryptHelper import EncryptHelper, md5
 from .const import MAC_KEY
 
 sd = StorageData('password')
@@ -29,7 +29,7 @@ class HttpView(HomeAssistantView):
 
         # 判断密钥是否匹配
         now = datetime.datetime.now()
-        if token != helper.md5(server_key + now.strftime('%Y%m%d%H')):
+        if token != md5(server_key + now.strftime('%Y%m%d%H')):
             hass.loop.create_task(hass.services.async_call('persistent_notification', 'create', {
                 'title': '我的密码',
                 'message':  f'客户端{request.remote}【{now.strftime("%Y-%m-%d %H:%M:%S")}】登录失败'
@@ -44,28 +44,28 @@ class HttpView(HomeAssistantView):
             _list = sd.load()
             return self.json({
                 'code': '0',
-                'data': map(lambda item: {
+                'data': list(map(lambda item: {
                     'key': helper.Decrypt(item['key']),
                     'title': item['title'],
                     'category': item['category']
-                }, _list)
+                }, _list))
             })
 
         # 获取详情
         if _type == 'info':
-            data = sd.get(key)
+            data = sd.get(helper.Encrypt(key))
             if data is None:
                 return self.json_message("未找到数据", message_code='1')
             else:
-                data['key'] = helper.Decrypt(data['key'])
+                data['key'] = key
                 return self.json({ 'code': '0', 'data': data})
 
         return self.json_message("未知错误", message_code='1')
 
     async def put(self, request):
-        helper, server_key = self.get_helper(request)
+        helper, server_key, hass = self.get_helper(request)
 
-        body = request.json()
+        body = await request.json()
         key = body.get('key')
 
         sd.add({
@@ -77,9 +77,9 @@ class HttpView(HomeAssistantView):
         return self.json_message("添加成功", message_code='0')
 
     async def post(self, request):
-        helper, server_key = self.get_helper(request)
+        helper, server_key, hass = self.get_helper(request)
 
-        body = request.json()
+        body = await request.json()
         key = body.get('key')
 
         sd.update({
@@ -91,7 +91,7 @@ class HttpView(HomeAssistantView):
         return self.json_message("更新成功", message_code='0')
 
     async def delete(self, request):
-        helper, server_key = self.get_helper(request)
+        helper, server_key, hass = self.get_helper(request)
 
         query = request.query
         key = query.get('key')

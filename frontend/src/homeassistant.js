@@ -24,7 +24,7 @@ class HomeAssistant {
                 body = JSON.stringify(data)
                 break;
         }
-        return fetch(url, {
+        return parent.document.querySelector('home-assistant').hass.fetchWithAuth(url, {
             method,
             body,
             headers: {
@@ -34,7 +34,7 @@ class HomeAssistant {
     }
 
     getToken(key) {
-        return key + new Date().toLocaleString().replace(/\/|\s/g, '').substring(0, 10)
+        return EncryptHelper.prototype.md5(key + new Date().toLocaleString().replace(/\/|\s/g, '').substring(0, 10))
     }
 
     /**
@@ -64,8 +64,12 @@ class HomeAssistant {
      * @param {string} key 
      * @returns
      */
-    getInfo(key) {
-        return this.http('get', { type: 'info', key })
+    async getInfo(key) {
+        const res = await this.http('get', { type: 'info', key })
+        const { data } = res
+        const helper = new EncryptHelper(key, sessionStorage[PASSWORD_KEY])
+        data.text = helper.Decrypt(data.text)
+        return data
     }
 
     /**
@@ -73,7 +77,8 @@ class HomeAssistant {
      * @param {object} param0 
      * @returns 
      */
-    put({ key, title, category, text }) {
+    put({ title, category, text }) {
+        const key = `${Date.now()}T${Math.random().toString(16).substr(-4)}`
         const helper = new EncryptHelper(key, sessionStorage[PASSWORD_KEY])
         return this.http('put', { key, title, category, text: helper.Encrypt(text) })
     }
