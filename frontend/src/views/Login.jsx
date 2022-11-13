@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import './Login.css';
+import ha from '../homeassistant'
 
 function App() {
 
@@ -7,9 +8,15 @@ function App() {
 
     const handleCnhange = (e) => setKey(e.target.value)
 
-    const loginClick = () => {
-        location.hash = '#/index'
-        // sessionStorage['password-key'] = ''
+    const loginClick = async () => {
+        if (!key) return top.alert("请输入密钥")
+
+        const res = await ha.login(key)
+        if (res.code == '0') {
+            location.hash = '#/index'
+        } else {
+            top.alert("密钥错误！")
+        }
     }
 
     return (
