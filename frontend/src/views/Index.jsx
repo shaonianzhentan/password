@@ -57,7 +57,7 @@ export default function App() {
                             <li><a>3这是分类筛选</a></li>
                         </ul>
                     </div>
-                    <div className="form-control">
+                    <div className="form-control w-full">
                         <input type="search" placeholder="搜索..." onChange={e => search(e.target.value)} className="input input-bordered" />
                     </div>
                 </div>
@@ -84,7 +84,7 @@ export default function App() {
                     )}
             </div>
 
-            <ShowPassword data={info} />
+            <ShowPassword info={info} />
         </div>
     );
 }

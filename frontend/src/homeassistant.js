@@ -68,7 +68,11 @@ class HomeAssistant {
      */
     async getInfo(key) {
         const res = await this.http('get', { type: 'info', key })
-        const { data } = res
+        const { data, code, message } = res
+        if (code != '0') {
+            top.alert(message)
+            return {}
+        }
         const helper = new EncryptHelper(data.key, sessionStorage[PASSWORD_KEY])
         data.text = helper.Decrypt(data.text)
         return data
