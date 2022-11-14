@@ -9,9 +9,6 @@ from .const import DOMAIN
 CONFIG_SCHEMA = cv.deprecated(DOMAIN)
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    hass.http.register_view(HttpView)
-    url = f'/{DOMAIN}-www'
-    hass.http.register_static_path(url, hass.config.path(f"custom_components/{DOMAIN}/www"), False)
 
     url_path = entry.entry_id
     config = entry.data
@@ -19,6 +16,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # 保存密钥
     hass.data.setdefault(f'{DOMAIN}-key', config.get('key'))
+
+    hass.http.register_view(HttpView)
+    url = f'/{url_path}-www'
+    hass.http.register_static_path(url, hass.config.path(f"custom_components/{DOMAIN}/www"), False)
 
     hass.components.frontend.async_register_built_in_panel("iframe", manifest.name,
             "mdi:book-lock-outline", url_path,
