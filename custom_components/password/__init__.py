@@ -31,4 +31,5 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     url_path = entry.entry_id
     hass.components.frontend.async_remove_panel(url_path)
+    manifest.update()
     return True
