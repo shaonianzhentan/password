@@ -8,11 +8,13 @@ from homeassistant.data_entry_flow import FlowResult
 
 from .EncryptHelper import md5
 from .manifest import manifest
+from .const import MAC_KEY
 
 DOMAIN = manifest.domain
 DATA_SCHEMA = vol.Schema({
+    vol.Required("mac_key", default=MAC_KEY): str,
     vol.Required("key"): str,
-    vol.Required("require_admin"): bool
+    vol.Required("require_admin", default=True): bool
 })
 
 class SimpleConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -30,4 +32,5 @@ class SimpleConfigFlow(ConfigFlow, domain=DOMAIN):
             return self.async_show_form(step_id="user", data_schema=DATA_SCHEMA)
 
         user_input['key'] = md5(user_input['key'])
+        del user_input['mac_key']
         return self.async_create_entry(title=DOMAIN, data=user_input)

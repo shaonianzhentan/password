@@ -57,8 +57,11 @@ class HttpView(HomeAssistantView):
             if data is None:
                 return self.json_message("未找到数据", message_code='1')
             else:
-                data['key'] = helper.Decrypt(key)
-                return self.json({ 'code': '0', 'data': data})
+                try:
+                    data['key'] = helper.Decrypt(key)
+                    return self.json({ 'code': '0', 'data': data})
+                except Exception as ex:
+                    pass
 
         return self.json_message("未知错误", message_code='1')
 
@@ -84,7 +87,7 @@ class HttpView(HomeAssistantView):
         key = body.get('key')
 
         sd.update({
-            'key': key,
+            'key': helper.Encrypt(key),
             'title': body.get('title'),
             'category': body.get('category'),
             'text': body.get('text'),
