@@ -61,26 +61,26 @@ class OptionsFlowHandler(OptionsFlow):
             return self.async_show_form(step_id="user", data_schema=DATA_SCHEMA, errors=errors)
         # 选项更新
         mac_key = user_input['mac_key']
-        server_key = self.hass.data.get(f'{manifest.domain}-key')
-
-        try:
-            helper = EncryptHelper(server_key, MAC_KEY)
-            _helper = EncryptHelper(server_key, mac_key)
-            _list = sd.load()
-            for item in _list:
-                # 原始MAC解密
-                _key = _helper.Decrypt(item['key'])
-                # 本地MAC加密
-                item['key'] = helper.Decrypt(_key)
-            sd.save(_list)
-        except Exception as ex:
-            print(ex)
-            DATA_SCHEMA = vol.Schema({
-                vol.Required("mac_key", default=mac_key): str
-            })
-            return self.async_show_form(step_id="user", data_schema=DATA_SCHEMA, errors={
-                'base': 'decrypt'
-            })
+        if mac_key != MAC_KEY:
+            server_key = self.hass.data.get(f'{manifest.domain}-key')
+            try:
+                helper = EncryptHelper(server_key, MAC_KEY)
+                _helper = EncryptHelper(server_key, mac_key)
+                _list = sd.load()
+                for item in _list:
+                    # 原始MAC解密
+                    _key = _helper.Decrypt(item['key'])
+                    # 本地MAC加密
+                    item['key'] = helper.Encrypt(_key)
+                sd.save(_list)
+            except Exception as ex:
+                print(ex)
+                DATA_SCHEMA = vol.Schema({
+                    vol.Required("mac_key", default=mac_key): str
+                })
+                return self.async_show_form(step_id="user", data_schema=DATA_SCHEMA, errors={
+                    'base': 'decrypt'
+                })
 
         del user_input['mac_key']
         return self.async_create_entry(title='', data=user_input)

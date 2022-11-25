@@ -10,22 +10,22 @@
         }
       }
     },
-    "options": {
-      "step": {
-        "user": {
-          "description": "没有HTTPS域名，可配置密钥通过第三方服务中转",
-          "data": {
-            "mac_key": "本机MAC地址"
-          }
-        }
-      },
-      "error": {
-        "decrypt": "解密错误"
-      }
-    },
     "error": {},
     "abort": {
       "single_instance_allowed": "仅允许单个配置."
+    }
+  },
+  "options": {
+    "step": {
+      "user": {
+        "description": "输入解密的MAC地址，可将之前的数据迁移加密",
+        "data": {
+          "mac_key": "本机MAC地址"
+        }
+      }
+    },
+    "error": {
+      "decrypt": "解密错误"
     }
   }
 }
