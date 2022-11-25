@@ -6,9 +6,21 @@
         "description": "数据解密依赖密钥和本机MAC地址，更换设备后无法解密，\n请务必一定要记住MAC地址和密钥",
         "data": {
           "require_admin": "仅管理员可见",
-          "mac_key": "本机MAC地址",
           "key": "密钥"
         }
+      }
+    },
+    "options": {
+      "step": {
+        "user": {
+          "description": "没有HTTPS域名，可配置密钥通过第三方服务中转",
+          "data": {
+            "mac_key": "本机MAC地址"
+          }
+        }
+      },
+      "error": {
+        "decrypt": "解密错误"
       }
     },
     "error": {},

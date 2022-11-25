@@ -50,3 +50,7 @@ class StorageData():
             del result[del_index]
             save_json(self.file_path, result)
         return result
+
+    def save(self, data):
+        '''保存文件'''
+        save_json(self.file_path, data)
