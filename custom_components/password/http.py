@@ -36,12 +36,21 @@ class HttpView(HomeAssistantView):
             }))
             return self.json_message("密钥错误", message_code='1')
 
+        _list = sd.load()
         if _type == 'login':
+            # 
+            if len(_list) > 0:
+                try:
+                    item = _list[0]
+                    helper.Decrypt(item['key'])
+                except Exception as ex:
+                    print(ex)
+                    return self.json_message("当前密码文件无法解密，请在集成选项中输入MAC值更新密码文件", message_code='1')
+
             return self.json_message("登录成功", message_code='0')
 
         # 获取列表
         if _type == 'list':
-            _list = sd.load()
             return self.json({
                 'code': '0',
                 'data': list(map(lambda item: {
