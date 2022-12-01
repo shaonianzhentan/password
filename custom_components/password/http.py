@@ -1,10 +1,12 @@
 import datetime
+from pytz import timezone
 from homeassistant.components.http import HomeAssistantView
 from .storage import StorageData
 from .manifest import manifest
 from .EncryptHelper import EncryptHelper, md5
 from .const import MAC_KEY
 
+cn = timezone('Asia/Shanghai')
 sd = StorageData('password')
 
 class HttpView(HomeAssistantView):
@@ -28,7 +30,7 @@ class HttpView(HomeAssistantView):
         token = query.get('token')
 
         # 判断密钥是否匹配
-        now = datetime.datetime.now()
+        now = datetime.datetime.now(cn)
         if token != md5(server_key + now.strftime('%Y%m%d%H')):
             hass.loop.create_task(hass.services.async_call('persistent_notification', 'create', {
                 'title': '我的密码',
@@ -85,7 +87,7 @@ class HttpView(HomeAssistantView):
             'title': body.get('title'),
             'category': body.get('category'),
             'text': body.get('text'),
-            'date': datetime.datetime.now().strftime('%Y-%m-%d')
+            'date': datetime.datetime.now(cn).strftime('%Y-%m-%d')
         })
         return self.json_message("添加成功", message_code='0')
 
@@ -100,7 +102,7 @@ class HttpView(HomeAssistantView):
             'title': body.get('title'),
             'category': body.get('category'),
             'text': body.get('text'),
-            'date': datetime.datetime.now().strftime('%Y-%m-%d')
+            'date': datetime.datetime.now(cn).strftime('%Y-%m-%d')
         })
         return self.json_message("更新成功", message_code='0')
 
