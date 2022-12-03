@@ -1,4 +1,5 @@
 import EncryptHelper from './EncryptHelper'
+import dayjs from 'dayjs'
 
 const PASSWORD_KEY = 'password-key'
 
@@ -34,7 +35,7 @@ class HomeAssistant {
     }
 
     getToken(key) {
-        return EncryptHelper.prototype.md5(key + new Date().toLocaleString().replace(/\/|\s/g, '').substring(0, 10))
+        return EncryptHelper.prototype.md5(key + dayjs().format('YYYYMMDDHH'))
     }
 
     /**
