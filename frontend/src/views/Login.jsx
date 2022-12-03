@@ -30,7 +30,7 @@ function App() {
 
             <div className="card md:w-96 bg-base-100 shadow-xl mx-auto mt-8">
                 <figure className="px-10 pt-10">
-                    <img src="https://placeimg.com/400/225/arch" alt="Shoes" className="rounded-xl" />
+                    <img src="/static/icons/favicon-apple-180x180.png" alt="Home Assistant" className="rounded-xl" />
                 </figure>
                 <div className="card-body items-center text-center">
                     <h2 className="card-title">MY PASSWORD</h2>
