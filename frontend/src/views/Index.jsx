@@ -39,7 +39,8 @@ export default function App() {
     }
 
     const search = (val) => {
-        const data = val ? source.filter(ele => ele.category.includes(val) || ele.title.includes(val)) : source
+        const key = val.toLocaleLowerCase()
+        const data = val ? source.filter(ele => ele.category.toLocaleLowerCase().includes(key) || ele.title.toLocaleLowerCase().includes(key)) : source
         setList(data)
     }
 
