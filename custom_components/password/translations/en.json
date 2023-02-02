@@ -3,7 +3,7 @@
   "config": {
     "step": {
       "user": {
-        "description": "数据解密依赖密钥和本机MAC地址，更换设备后无法解密，\n请务必一定要记住MAC地址和密钥",
+        "description": "数据解密依赖密钥和当前HomeAssistant的UUID\n请务必一定要找个地方记录备份一下",
         "data": {
           "require_admin": "仅管理员可见",
           "key": "密钥"
@@ -18,9 +18,9 @@
   "options": {
     "step": {
       "user": {
-        "description": "输入解密的MAC地址，可将之前的数据迁移加密",
+        "description": "输入解密的UUID，可将之前的数据迁移加密",
         "data": {
-          "mac_key": "本机MAC地址"
+          "mac_key": "当前HomeAssistant的UUID"
         }
       }
     },
