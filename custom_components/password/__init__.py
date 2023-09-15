@@ -31,7 +31,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     #hass.components.frontend.add_extra_js_url(hass, module_url)
 
     await hass.components.panel_custom.async_register_panel(
-            frontend_url_path='my_password',
+            frontend_url_path='my-password',
             webcomponent_name="my-password",
             sidebar_title=manifest.name,
             sidebar_icon="mdi:book-lock-outline",
