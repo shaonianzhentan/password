@@ -4,6 +4,7 @@ import { createRef, ref } from 'lit/directives/ref.js';
 
 import ha from './homeassistant.js'
 
+import '@material/mwc-top-app-bar-fixed'
 import '@material/web/all'
 
 interface IItem {
@@ -78,12 +79,13 @@ export class MyPassword extends LitElement {
       </div>
     </md-dialog>
 
-    <ha-top-app-bar-fixed> 
+    <mwc-top-app-bar-fixed> 
       <ha-menu-button slot="navigationIcon"></ha-menu-button> 
       <div slot="title">我的密码</div>
       <ha-icon-button slot="actionItems" @click=${{ handleEvent: () => this._searchClick() }}>🔎</ha-icon-button> 
       <ha-icon-button slot="actionItems" @click=${{ handleEvent: () => this._addClick() }}>+</ha-icon-button> 
-    </ha-top-app-bar-fixed>
+    </mwc-top-app-bar-fixed>
+
 
     <md-list style="min-width: 100%;">
       ${this.list.map(item => html`<md-list-item headline="${item.title}" @click=${{ handleEvent: () => this._onItemClick(item) }}></md-list-item>`)}

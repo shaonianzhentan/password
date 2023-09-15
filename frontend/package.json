@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@material/mwc-top-app-bar-fixed": "^0.27.0",
     "@material/web": "^1.0.0-pre.17",
     "crypto-js": "^4.1.1",
     "dayjs": "^1.11.9",
