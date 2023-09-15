@@ -2,16 +2,19 @@ import { LitElement, css, html } from 'lit'
 import { customElement, property } from 'lit/decorators.js'
 import { createRef, ref } from 'lit/directives/ref.js';
 
+// @ts-ignore
 import ha from './homeassistant.js'
 
 import '@material/mwc-top-app-bar-fixed'
-import '@material/web/all'
+import '@material/web/textfield/outlined-text-field.js'
+
 
 interface IItem {
   key: string;
   title: string;
   category: string;
   text?: string;
+  link?: string;
   date?: string;
 }
 
@@ -23,9 +26,7 @@ interface IItem {
  */
 @customElement('my-password')
 export class MyPassword extends LitElement {
-  /**
-   * Copy for the read the docs hint.
-   */
+
   @property()
   key = ''
 
@@ -35,9 +36,16 @@ export class MyPassword extends LitElement {
   @property({ type: Array })
   list = [] as IItem[]
 
+  source = [] as IItem[]
+
+  @property({ type: Array })
+  categories = [] as string[]
+
+  @property({ type: Boolean })
+  showSearch = false
+
   dialogLoginRef = createRef()
   passwordRef = createRef()
-
 
   dialogEditRef = createRef()
   categoryRef = createRef()
@@ -45,51 +53,67 @@ export class MyPassword extends LitElement {
   textRef = createRef()
   linkRef = createRef()
 
+  searchValueRef = createRef()
+  searchCategoryRef = createRef()
+
   render() {
     return html`
-    ${ha.passwordKey ? '' : html`<md-dialog open ${ref(this.dialogLoginRef)}>
-      <div slot="headline">
-        我的密码
-      </div>
-      <div slot="content" method="dialog">
+    ${ha.passwordKey ? '' : html`<ha-dialog open ${ref(this.dialogLoginRef)} heading="我的密码">
+      <div>
         <md-filled-text-field label="密钥" type="password" class="form-item"  ${ref(this.passwordRef)}></md-filled-text-field>
       </div>
-      <div slot="actions">
-        <md-text-button @click=${this._loginClick.bind(this)}>登录</md-text-button>
-      </div>
-    </md-dialog>`
+      
+      <mwc-button slot="primaryAction" raised @click=${this._loginClick.bind(this)}>登录</mwc-button>
+
+    </ha-dialog>`
       }
 
-    <md-dialog id="dialog-edit" ${ref(this.dialogEditRef)}>
-      <div slot="headline">
-        ${this.key ? '密码信息' : '新增密码'}
-      </div>
-      <div slot="content" method="dialog">
+    <ha-dialog id="dialog-edit" ${ref(this.dialogEditRef)} heading="${this.key ? '密码信息' : '新增密码'}">
+      <div>
         <md-outlined-text-field class="form-item" ${ref(this.categoryRef)} label="密码分类">
-          <md-text-button slot="trailingicon">选择</md-text-button>
+          <ha-select slot="trailingicon" style="width: 130px;">
+          ${this.categories.map(ele => html`<mwc-list-item value="${ele}" @click="${() => (this.categoryRef.value as any).value = ele}">${ele}</mwc-list-item>`)}
+          </ha-select>
         </md-outlined-text-field>
         <md-outlined-text-field class="form-item" ${ref(this.titleRef)} type="textarea" rows="2" label="备注信息"></md-outlined-text-field>
         <md-outlined-text-field class="form-item" ${ref(this.textRef)} type="textarea" rows="5" label="加密内容"></md-outlined-text-field>
         <md-outlined-text-field class="form-item" ${ref(this.linkRef)} label="关联链接"></md-outlined-text-field>
       </div>
-      <div slot="actions">
-        <md-outlined-button @click=${this._removeClick.bind(this)}>删除</md-outlined-button>
-        <md-outlined-button @click=${this._saveClick.bind(this)}>保存</md-outlined-button>
-        <md-text-button @click=${{ handleEvent: () => (this.dialogEditRef.value as any).open = false }}>取消</md-text-button>
-      </div>
-    </md-dialog>
 
-    <mwc-top-app-bar-fixed> 
-      <ha-menu-button slot="navigationIcon"></ha-menu-button> 
-      <div slot="title">我的密码</div>
-      <ha-icon-button slot="actionItems" @click=${{ handleEvent: () => this._searchClick() }}>🔎</ha-icon-button> 
-      <ha-icon-button slot="actionItems" @click=${{ handleEvent: () => this._addClick() }}>+</ha-icon-button> 
+      <mwc-button slot="secondaryAction" @click=${{ handleEvent: () => (this.dialogEditRef.value as any).open = false }}>取消</mwc-button>    
+      ${this.key ? html`<mwc-button  slot="secondaryAction" outlined  @click=${this._removeClick.bind(this)}>删除</mwc-button>` : ''}
+      <mwc-button slot="primaryAction" raised  @click=${this._saveClick.bind(this)}>保存</mwc-button>
+  
+    </ha-dialog>
+
+    <mwc-top-app-bar-fixed>
+      <div slot="title" @click=${() => this.fire('hass-toggle-menu')} >我的密码</div>
+      <ha-icon-button slot="actionItems" @click=${{ handleEvent: () => this._searchClick() }}>
+        <ha-icon icon="mdi:magnify"></ha-icon>
+      </ha-icon-button> 
+      <ha-icon-button slot="actionItems" @click=${{ handleEvent: () => this._addClick() }}>
+        <ha-icon icon="mdi:plus"></ha-icon>
+      </ha-icon-button> 
     </mwc-top-app-bar-fixed>
 
-
-    <md-list style="min-width: 100%;">
-      ${this.list.map(item => html`<md-list-item headline="${item.title}" @click=${{ handleEvent: () => this._onItemClick(item) }}></md-list-item>`)}
-    </md-list>
+    ${this.showSearch ? html`<div class="search-panel">
+    <md-outlined-text-field label="搜索" ${ref(this.searchValueRef)} @input="${this._search.bind(this)}" >
+      <ha-select slot="trailingicon" ${ref(this.searchCategoryRef)} @change="${this._search.bind(this)}" style="width: 130px;">
+      <mwc-list-item value="">全部</mwc-list-item>
+      ${this.categories.map(ele => html`<mwc-list-item value="${ele}">${ele}</mwc-list-item>`)}
+      </ha-select>
+    </md-outlined-text-field>
+  </div>` : ''}
+    
+    <mwc-list style="min-width: 100%;">
+      ${this.list.map((item, index) => html`<mwc-list-item twoline graphic="icon" @click=${{ handleEvent: () => this._onItemClick(item) }}>
+       <span>${item.title}</span>
+       <span slot="secondary">${item.link}</span>
+       
+       <span slot="graphic" >${index + 1}</span>
+      </mwc-list-item>
+      <li divider role="separator"></li>`)}
+    </mwc-list>
     `
   }
 
@@ -112,6 +136,21 @@ export class MyPassword extends LitElement {
 
   private _searchClick() {
     if (!ha.passwordKey) return this._showLoginDialog()
+    this.showSearch = !this.showSearch
+    if (this.showSearch) {
+      this.source = JSON.parse(JSON.stringify(this.list))
+    } else {
+      this.list = JSON.parse(JSON.stringify(this.source))
+    }
+  }
+
+  private _search() {
+    const searchValue: any = this.searchValueRef.value
+    const searchCategory: any = this.searchCategoryRef.value
+    let arr = this.source
+    if (searchValue.value) arr = arr.filter(ele => ele.title.includes(searchValue.value))
+    if (searchCategory.value) arr = arr.filter(ele => ele.category == searchCategory.value)
+    this.list = arr
   }
 
   private _addClick() {
@@ -124,6 +163,7 @@ export class MyPassword extends LitElement {
       this._setValue(this.categoryRef.value, '')
       this._setValue(this.titleRef.value, '')
       this._setValue(this.textRef.value, '')
+      this._setValue(this.linkRef.value, '')
     }
   }
 
@@ -132,10 +172,11 @@ export class MyPassword extends LitElement {
     const category = this._getValue(this.categoryRef.value)
     const title = this._getValue(this.titleRef.value)
     const text = this._getValue(this.textRef.value)
+    const link = this._getValue(this.linkRef.value)
 
     if (!(category && title && text)) return;
 
-    const params = { title, category, text }
+    const params = { title, category, text, link }
     const res = key ? await ha.post({ ...params, key }) : await ha.put(params)
 
     this.toast(res.message)
@@ -188,11 +229,20 @@ export class MyPassword extends LitElement {
     width: 100%;
     margin: 10px 0;
   }
+  .search-panel{
+    padding: 0 8px;    
+  }
+  .search-panel md-outlined-text-field{
+    width: 100%;
+  }
+  .mdc-top-app-bar{
+    height: 56px;
+  }
   `
 
   //#region HomeAssistant
 
-  fire(type: string, data: object) {
+  fire(type: string, data = {}) {
     const event: any = new Event(type, {
       bubbles: true,
       cancelable: false,
@@ -209,13 +259,26 @@ export class MyPassword extends LitElement {
   //#endregion
 
   async loadData() {
+    if (!ha.passwordKey) return
     const res = await ha.getList()
     this.list = res.data
+    this.categories = Array.from(new Set(this.list.map(ele => ele.category)))
   }
 
   connectedCallback() {
     super.connectedCallback()
     this.loadData()
+
+    setTimeout(() => {
+      var sheet = new CSSStyleSheet()
+      sheet.replaceSync(`
+      .mdc-top-app-bar__row{ height: 56px; }
+      .mdc-top-app-bar__section { padding: 4px 12px; }`)
+
+      const appbar: any = this.shadowRoot?.querySelector('mwc-top-app-bar-fixed')?.shadowRoot
+
+      appbar.adoptedStyleSheets = [...appbar.adoptedStyleSheets, sheet]
+    }, 60)
   }
 }
 

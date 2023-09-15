@@ -95,10 +95,10 @@ class HomeAssistant {
    * @param {object} param0 
    * @returns 
    */
-  put({ title, category, text }) {
+  put({ title, category, text, link }) {
     const key = `${Date.now()}T${Math.random().toString(16).substr(-4)}`
     const helper = new EncryptHelper(key, this.passwordKey)
-    return this.http('put', { key, title, category, text: helper.Encrypt(text) })
+    return this.http('put', { key, link, title, category, text: helper.Encrypt(text) })
   }
 
   /**
@@ -106,10 +106,11 @@ class HomeAssistant {
    * @param {object} param0 
    * @returns 
    */
-  post({ key, title, category, text }) {
+  post({ key, title, category, text, link }) {
     const helper = new EncryptHelper(key, this.passwordKey)
     return this.http('post', {
       key,
+      link,
       title,
       category,
       text: helper.Encrypt(text)

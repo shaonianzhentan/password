@@ -56,9 +56,11 @@ class HttpView(HomeAssistantView):
             return self.json({
                 'code': '0',
                 'data': list(map(lambda item: {
-                    'key': item['key'],
-                    'title': item['title'],
-                    'category': item['category']
+                    'key': item.get('key'),
+                    'title': item.get('title'),
+                    'link': item.get('link'),
+                    'date': item.get('date'),
+                    'category': item.get('category')
                 }, _list))
             })
 
@@ -87,6 +89,7 @@ class HttpView(HomeAssistantView):
             'title': body.get('title'),
             'category': body.get('category'),
             'text': body.get('text'),
+            'link': body.get('link'),
             'date': datetime.datetime.now(cn).strftime('%Y-%m-%d')
         })
         return self.json_message("添加成功", message_code='0')
@@ -102,6 +105,7 @@ class HttpView(HomeAssistantView):
             'title': body.get('title'),
             'category': body.get('category'),
             'text': body.get('text'),
+            'link': body.get('link'),
             'date': datetime.datetime.now(cn).strftime('%Y-%m-%d')
         })
         return self.json_message("更新成功", message_code='0')
