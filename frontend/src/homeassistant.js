@@ -5,13 +5,17 @@ const PASSWORD_KEY = 'password-key'
 
 class HomeAssistant {
 
+  get passwordKey() {
+    return sessionStorage[PASSWORD_KEY]
+  }
+
   http(method, data) {
     let m = method.toLocaleLowerCase()
     let url = '/api/password'
     let body = null
     // 授权
     if (!('token' in data)) {
-      data['token'] = this.getToken(sessionStorage[PASSWORD_KEY])
+      data['token'] = this.getToken(this.passwordKey)
     }
 
     switch (m) {
@@ -81,7 +85,7 @@ class HomeAssistant {
       top.alert(message)
       return {}
     }
-    const helper = new EncryptHelper(data.key, sessionStorage[PASSWORD_KEY])
+    const helper = new EncryptHelper(data.key, this.passwordKey)
     data.text = helper.Decrypt(data.text)
     return data
   }
@@ -91,10 +95,10 @@ class HomeAssistant {
    * @param {object} param0 
    * @returns 
    */
-  put({ title, category, text }) {
+  put({ title, category, text, link }) {
     const key = `${Date.now()}T${Math.random().toString(16).substr(-4)}`
-    const helper = new EncryptHelper(key, sessionStorage[PASSWORD_KEY])
-    return this.http('put', { key, title, category, text: helper.Encrypt(text) })
+    const helper = new EncryptHelper(key, this.passwordKey)
+    return this.http('put', { key, link, title, category, text: helper.Encrypt(text) })
   }
 
   /**
@@ -102,10 +106,11 @@ class HomeAssistant {
    * @param {object} param0 
    * @returns 
    */
-  post({ key, title, category, text }) {
-    const helper = new EncryptHelper(key, sessionStorage[PASSWORD_KEY])
+  post({ key, title, category, text, link }) {
+    const helper = new EncryptHelper(key, this.passwordKey)
     return this.http('post', {
       key,
+      link,
       title,
       category,
       text: helper.Encrypt(text)

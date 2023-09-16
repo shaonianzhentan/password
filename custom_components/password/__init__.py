@@ -24,14 +24,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(f'{DOMAIN}-key', server_key)
 
     hass.http.register_view(HttpView)
-    url = f'/{url_path}-www'
+    url = f'/{url_path}'
     hass.http.register_static_path(url, hass.config.path(f"custom_components/{DOMAIN}/www"), False)
 
-    hass.components.frontend.async_register_built_in_panel("iframe", manifest.name,
-            "mdi:book-lock-outline", url_path,
-            {"url": f"{url}/index.html?v={manifest.version}"},
-            require_admin=require_admin,
-        )
+    module_url = f"{url}/my-password.js?v={manifest.version}"
+    #hass.components.frontend.add_extra_js_url(hass, module_url)
+
+    await hass.components.panel_custom.async_register_panel(
+            frontend_url_path='my-password',
+            webcomponent_name="my-password",
+            sidebar_title=manifest.name,
+            sidebar_icon="mdi:book-lock-outline",
+            module_url=module_url,
+            config={},
+            require_admin=require_admin
+          )
     # 判断是否异常
     _list = sd.load()
     if len(_list) > 0:
