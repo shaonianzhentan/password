@@ -429,10 +429,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */let nr=class extends H0{constructor(){super(...arguments),this.fieldTag=qi`md-outlined-field`}};nr.styles=[D0,B0,E0];nr=N([nt("md-outlined-text-field")],nr);var O0=Object.defineProperty,L0=Object.getOwnPropertyDescriptor,Ge=(i,e,t,r)=>{for(var o=r>1?void 0:r?L0(e,t):e,a=i.length-1,d;a>=0;a--)(d=i[a])&&(o=(r?d(e,t,o):d(o))||o);return r&&o&&O0(e,t,o),o};let we=class extends xe{constructor(){super(...arguments),this.key="",this.list=[],this.source=[],this.categories=[],this.showSearch=!1,this.dialogLoginRef=pe(),this.passwordRef=pe(),this.dialogEditRef=pe(),this.categoryRef=pe(),this.titleRef=pe(),this.textRef=pe(),this.linkRef=pe(),this.searchValueRef=pe(),this.searchCategoryRef=pe()}render(){return X`
     ${ce.passwordKey?"":X`<ha-dialog open ${fe(this.dialogLoginRef)} heading="我的密码">
-      <div>
-        <md-filled-text-field label="密钥" type="password" class="form-item"  ${fe(this.passwordRef)}></md-filled-text-field>
-      </div>
-      
+    
+        <md-outlined-text-field label="密钥" type="password" class="form-item"  ${fe(this.passwordRef)}></md-outlined-text-field>
+    
+        
       <mwc-button slot="primaryAction" raised @click=${this._loginClick.bind(this)}>登录</mwc-button>
 
     </ha-dialog>`}
@@ -446,7 +446,9 @@
         </md-outlined-text-field>
         <md-outlined-text-field class="form-item" ${fe(this.titleRef)} type="textarea" rows="2" label="备注信息"></md-outlined-text-field>
         <md-outlined-text-field class="form-item" ${fe(this.textRef)} type="textarea" rows="5" label="加密内容"></md-outlined-text-field>
-        <md-outlined-text-field class="form-item" ${fe(this.linkRef)} label="关联链接"></md-outlined-text-field>
+        <md-outlined-text-field class="form-item" ${fe(this.linkRef)} label="关联链接">
+          <mwc-button slot="trailingicon" @click=${this._linkClick.bind(this)}>跳转</mwc-button>
+        </md-outlined-text-field>
       </div>
 
       <mwc-button slot="secondaryAction" @click=${{handleEvent:()=>this.dialogEditRef.value.open=!1}}>取消</mwc-button>    
@@ -480,10 +482,11 @@
        <span slot="secondary">${i.link}</span>
        
        <span slot="graphic" >${e+1}</span>
+       
       </mwc-list-item>
       <li divider role="separator"></li>`)}
     </mwc-list>
-    `}_showLoginDialog(){this.dialogLoginRef.value.show()}async _loginClick(){const e=this.passwordRef.value.value.trim();e&&(await ce.login(e),this.dialogLoginRef.value.close())}_searchClick(){if(!ce.passwordKey)return this._showLoginDialog();this.showSearch=!this.showSearch,this.showSearch?this.source=JSON.parse(JSON.stringify(this.list)):this.list=JSON.parse(JSON.stringify(this.source))}_search(){const i=this.searchValueRef.value,e=this.searchCategoryRef.value;let t=this.source;i.value&&(t=t.filter(r=>r.title.includes(i.value))),e.value&&(t=t.filter(r=>r.category==e.value)),this.list=t}_addClick(){if(!ce.passwordKey)return this._showLoginDialog();const i=this.dialogEditRef.value;i&&(i.show(),this.key="",this._setValue(this.categoryRef.value,""),this._setValue(this.titleRef.value,""),this._setValue(this.textRef.value,""),this._setValue(this.linkRef.value,""))}async _saveClick(){const{key:i}=this,e=this._getValue(this.categoryRef.value),t=this._getValue(this.titleRef.value),r=this._getValue(this.textRef.value),o=this._getValue(this.linkRef.value);if(!(e&&t&&r))return;const a={title:t,category:e,text:r,link:o},d=i?await ce.post({...a,key:i}):await ce.put(a);this.toast(d.message),d.code==0&&(this.loadData(),this.dialogEditRef.value.close())}async _removeClick(){if(top!=null&&top.confirm("确定删除吗？")){const e=this.titleRef.value.dataset.key,t=await ce.delete(e);this.toast(t.message),t.code==0&&(this.loadData(),this.dialogEditRef.value.close())}}async _onItemClick(i){const e=this.dialogEditRef.value;if(e){e.open=!0,this._setValue(this.categoryRef.value,i.category),this._setValue(this.titleRef.value,i.title);const t=this.titleRef.value;t.dataset.key=i.key;const r=await ce.getInfo(i.key);this.key=r.key,this._setValue(this.textRef.value,r.text)}}_setValue(i,e){i.value=e}_getValue(i){return i.value}fire(i,e={}){const t=new Event(i,{bubbles:!0,cancelable:!1,composed:!0});t.detail=e,this.dispatchEvent(t)}toast(i){this.fire("hass-notification",{message:i})}async loadData(){if(!ce.passwordKey)return;const i=await ce.getList();this.list=i.data,this.categories=Array.from(new Set(this.list.map(e=>e.category)))}connectedCallback(){super.connectedCallback(),this.loadData(),setTimeout(()=>{var t,r;var i=new CSSStyleSheet;i.replaceSync(`
+    `}_linkClick(){const i=this._getValue(this.linkRef.value);i&&window.open(i)}_showLoginDialog(){this.dialogLoginRef.value.show()}async _loginClick(){const e=this.passwordRef.value.value.trim();e&&(await ce.login(e),this.dialogLoginRef.value.close(),this.loadData())}_searchClick(){if(!ce.passwordKey)return this._showLoginDialog();this.showSearch=!this.showSearch,this.showSearch?this.source=JSON.parse(JSON.stringify(this.list)):this.list=JSON.parse(JSON.stringify(this.source))}_search(){const i=this.searchValueRef.value,e=this.searchCategoryRef.value;let t=this.source;i.value&&(t=t.filter(r=>r.title.includes(i.value))),e.value&&(t=t.filter(r=>r.category==e.value)),this.list=t}_addClick(){if(!ce.passwordKey)return this._showLoginDialog();const i=this.dialogEditRef.value;i&&(i.show(),this.key="",this._setValue(this.categoryRef.value,""),this._setValue(this.titleRef.value,""),this._setValue(this.textRef.value,""),this._setValue(this.linkRef.value,""))}async _saveClick(){const{key:i}=this,e=this._getValue(this.categoryRef.value),t=this._getValue(this.titleRef.value),r=this._getValue(this.textRef.value),o=this._getValue(this.linkRef.value);if(!(e&&t&&r))return;const a={title:t,category:e,text:r,link:o},d=i?await ce.post({...a,key:i}):await ce.put(a);this.toast(d.message),d.code==0&&(this.loadData(),this.dialogEditRef.value.close())}async _removeClick(){if(top!=null&&top.confirm("确定删除吗？")){const e=this.titleRef.value.dataset.key,t=await ce.delete(e);this.toast(t.message),t.code==0&&(this.loadData(),this.dialogEditRef.value.close())}}async _onItemClick(i){const e=this.dialogEditRef.value;if(e){e.open=!0,this._setValue(this.categoryRef.value,i.category),this._setValue(this.titleRef.value,i.title),this._setValue(this.linkRef.value,i.link||"");const t=this.titleRef.value;t.dataset.key=i.key;const r=await ce.getInfo(i.key);this.key=r.key,this._setValue(this.textRef.value,r.text)}}_setValue(i,e){i.value=e}_getValue(i){return i.value.trim()}fire(i,e={}){const t=new Event(i,{bubbles:!0,cancelable:!1,composed:!0});t.detail=e,this.dispatchEvent(t)}toast(i){this.fire("hass-notification",{message:i})}async loadData(){if(!ce.passwordKey)return;const i=await ce.getList();this.list=i.data,this.categories=Array.from(new Set(this.list.map(e=>e.category)))}connectedCallback(){super.connectedCallback(),this.loadData(),setTimeout(()=>{var t,r;var i=new CSSStyleSheet;i.replaceSync(`
       .mdc-top-app-bar__row{ height: 56px; }
       .mdc-top-app-bar__section { padding: 4px 12px; }`);const e=(r=(t=this.shadowRoot)==null?void 0:t.querySelector("mwc-top-app-bar-fixed"))==null?void 0:r.shadowRoot;e.adoptedStyleSheets=[...e.adoptedStyleSheets,i]},60)}};we.styles=$e`
   .form-item {
@@ -491,7 +494,7 @@
     margin: 10px 0;
   }
   .search-panel{
-    padding: 0 8px;    
+    padding: 8px 8px 0 8px;
   }
   .search-panel md-outlined-text-field{
     width: 100%;

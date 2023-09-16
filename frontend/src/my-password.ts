@@ -59,10 +59,10 @@ export class MyPassword extends LitElement {
   render() {
     return html`
     ${ha.passwordKey ? '' : html`<ha-dialog open ${ref(this.dialogLoginRef)} heading="我的密码">
-      <div>
-        <md-filled-text-field label="密钥" type="password" class="form-item"  ${ref(this.passwordRef)}></md-filled-text-field>
-      </div>
-      
+    
+        <md-outlined-text-field label="密钥" type="password" class="form-item"  ${ref(this.passwordRef)}></md-outlined-text-field>
+    
+        
       <mwc-button slot="primaryAction" raised @click=${this._loginClick.bind(this)}>登录</mwc-button>
 
     </ha-dialog>`
@@ -77,7 +77,9 @@ export class MyPassword extends LitElement {
         </md-outlined-text-field>
         <md-outlined-text-field class="form-item" ${ref(this.titleRef)} type="textarea" rows="2" label="备注信息"></md-outlined-text-field>
         <md-outlined-text-field class="form-item" ${ref(this.textRef)} type="textarea" rows="5" label="加密内容"></md-outlined-text-field>
-        <md-outlined-text-field class="form-item" ${ref(this.linkRef)} label="关联链接"></md-outlined-text-field>
+        <md-outlined-text-field class="form-item" ${ref(this.linkRef)} label="关联链接">
+          <mwc-button slot="trailingicon" @click=${this._linkClick.bind(this)}>跳转</mwc-button>
+        </md-outlined-text-field>
       </div>
 
       <mwc-button slot="secondaryAction" @click=${{ handleEvent: () => (this.dialogEditRef.value as any).open = false }}>取消</mwc-button>    
@@ -111,10 +113,18 @@ export class MyPassword extends LitElement {
        <span slot="secondary">${item.link}</span>
        
        <span slot="graphic" >${index + 1}</span>
+       
       </mwc-list-item>
       <li divider role="separator"></li>`)}
     </mwc-list>
     `
+  }
+
+  private _linkClick() {
+    const link = this._getValue(this.linkRef.value)
+    if (link) {
+      window.open(link)
+    }
   }
 
   private _showLoginDialog() {
@@ -131,6 +141,7 @@ export class MyPassword extends LitElement {
 
       const dialog: any = this.dialogLoginRef.value
       dialog.close()
+      this.loadData()
     }
   }
 
@@ -207,6 +218,7 @@ export class MyPassword extends LitElement {
       dialog.open = true
       this._setValue(this.categoryRef.value, item.category)
       this._setValue(this.titleRef.value, item.title)
+      this._setValue(this.linkRef.value, item.link || '')
       const titleElement: any = this.titleRef.value
       titleElement.dataset['key'] = item.key
 
@@ -221,7 +233,7 @@ export class MyPassword extends LitElement {
   }
 
   private _getValue(ele: any) {
-    return ele.value
+    return ele.value.trim()
   }
 
   static styles = css`
@@ -230,7 +242,7 @@ export class MyPassword extends LitElement {
     margin: 10px 0;
   }
   .search-panel{
-    padding: 0 8px;    
+    padding: 8px 8px 0 8px;
   }
   .search-panel md-outlined-text-field{
     width: 100%;
