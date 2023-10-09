@@ -29,7 +29,7 @@ class HomeAssistant {
         body = JSON.stringify(data)
         break;
     }
-    return parent.document.querySelector('home-assistant').hass.fetchWithAuth(url, {
+    return document.querySelector('home-assistant').hass.fetchWithAuth(url, {
       method,
       body,
       headers: {

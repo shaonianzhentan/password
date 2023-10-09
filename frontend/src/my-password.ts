@@ -60,7 +60,7 @@ export class MyPassword extends LitElement {
     return html`
     ${ha.passwordKey ? '' : html`<ha-dialog open ${ref(this.dialogLoginRef)} heading="我的密码">
     
-        <md-outlined-text-field label="密钥" type="password" class="form-item"  ${ref(this.passwordRef)}></md-outlined-text-field>
+        <md-outlined-text-field label="密钥" type="password" autofocus class="form-item" ${ref(this.passwordRef)}></md-outlined-text-field>
     
         
       <mwc-button slot="primaryAction" raised @click=${this._loginClick.bind(this)}>登录</mwc-button>
@@ -77,7 +77,7 @@ export class MyPassword extends LitElement {
         </md-outlined-text-field>
         <md-outlined-text-field class="form-item" ${ref(this.titleRef)} type="textarea" rows="2" label="备注信息"></md-outlined-text-field>
         <md-outlined-text-field class="form-item" ${ref(this.textRef)} type="textarea" rows="5" label="加密内容"></md-outlined-text-field>
-        <md-outlined-text-field class="form-item" ${ref(this.linkRef)} label="关联链接">
+        <md-outlined-text-field class="form-item" ${ref(this.linkRef)} type="url" label="关联链接">
           <mwc-button slot="trailingicon" @click=${this._linkClick.bind(this)}>跳转</mwc-button>
         </md-outlined-text-field>
       </div>
@@ -89,6 +89,7 @@ export class MyPassword extends LitElement {
     </ha-dialog>
 
     <mwc-top-app-bar-fixed>
+      
       <div slot="title" @click=${() => this.fire('hass-toggle-menu')} >我的密码</div>
       <ha-icon-button slot="actionItems" @click=${{ handleEvent: () => this._searchClick() }}>
         <ha-icon icon="mdi:magnify"></ha-icon>
@@ -99,7 +100,7 @@ export class MyPassword extends LitElement {
     </mwc-top-app-bar-fixed>
 
     ${this.showSearch ? html`<div class="search-panel">
-    <md-outlined-text-field label="搜索" ${ref(this.searchValueRef)} @input="${this._search.bind(this)}" >
+    <md-outlined-text-field label="搜索" ${ref(this.searchValueRef)} autofocus @input="${this._search.bind(this)}" >
       <ha-select slot="trailingicon" ${ref(this.searchCategoryRef)} @change="${this._search.bind(this)}" style="width: 130px;">
       <mwc-list-item value="">全部</mwc-list-item>
       ${this.categories.map(ele => html`<mwc-list-item value="${ele}">${ele}</mwc-list-item>`)}
@@ -150,6 +151,11 @@ export class MyPassword extends LitElement {
     this.showSearch = !this.showSearch
     if (this.showSearch) {
       this.source = JSON.parse(JSON.stringify(this.list))
+      // 获取焦点
+      setTimeout(() => {
+        const searchValue: any = this.searchValueRef.value
+        searchValue.focus()
+      }, 100)
     } else {
       this.list = JSON.parse(JSON.stringify(this.source))
     }
