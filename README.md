@@ -14,7 +14,7 @@
 
 ## 注意事项
 
-- 本程序采用`3DES数据加密算法`，以HomeAssistant本机MAC地址为`初始化向量IV`，当数据文件迁移时，更换HomeAssistant运行设备后无法解密
+- 本程序采用`3DES数据加密算法`，以当前HomeAssistant的UUID为`初始化向量IV`，当HomeAssistant存储目录`.storage`丢失后，仅凭密码文件无法解密
 
 - 请保存初始显示UUID，如果设备意外损坏，可通过`UUID、自定义密钥`这两个重要的关键信息解密
 
