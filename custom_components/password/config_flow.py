@@ -9,7 +9,6 @@ from homeassistant.config_entries import ConfigFlow, OptionsFlow, ConfigEntry
 
 from .EncryptHelper import EncryptHelper, md5
 from .manifest import manifest
-from .const import MAC_KEY
 from .storage import StorageData
 
 sd = StorageData('password')
@@ -51,6 +50,7 @@ class OptionsFlowHandler(OptionsFlow):
         return await self.async_step_user(user_input)
 
     async def async_step_user(self, user_input=None):
+        MAC_KEY = await sd.get_uuid()
         errors = {}
         if user_input is None:
             options = self.config_entry.options

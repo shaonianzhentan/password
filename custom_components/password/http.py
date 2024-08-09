@@ -1,12 +1,11 @@
 import datetime
 from pytz import timezone
 from homeassistant.components.http import HomeAssistantView
+from homeassistant.core import async_get_hass
 from .storage import StorageData
 from .manifest import manifest
 from .EncryptHelper import EncryptHelper, md5
-from .const import MAC_KEY
 
-cn = timezone('Asia/Shanghai')
 sd = StorageData('password')
 
 class HttpView(HomeAssistantView):
@@ -15,10 +14,18 @@ class HttpView(HomeAssistantView):
     name = "api:password"
     requires_auth = True
 
+    def __init__(self):
+        hass = async_get_hass()
+        hass.async_create_task(self.load_data(hass))
+
+    async def load_data(self, hass):
+        self.cn = await hass.async_add_executor_job(timezone, 'Asia/Shanghai')
+        self.uuid = await sd.get_uuid()
+
     def get_helper(self, request):
         hass = request.app["hass"]
         server_key = hass.data.get(f'{manifest.domain}-key')
-        helper = EncryptHelper(server_key, MAC_KEY)
+        helper = EncryptHelper(server_key, self.uuid)
         return helper, server_key, hass
 
     async def get(self, request):
@@ -30,7 +37,7 @@ class HttpView(HomeAssistantView):
         token = query.get('token')
 
         # 判断密钥是否匹配
-        now = datetime.datetime.now(cn)
+        now = datetime.datetime.now(self.cn)
         if token != md5(server_key + now.strftime('%Y%m%d%H')):
             hass.loop.create_task(hass.services.async_call('persistent_notification', 'create', {
                 'title': '我的密码',
@@ -38,7 +45,7 @@ class HttpView(HomeAssistantView):
             }))
             return self.json_message("密钥错误", message_code='1')
 
-        _list = sd.load()
+        _list = await hass.async_add_executor_job(sd.load)
         if _type == 'login':
             # 
             if len(_list) > 0:
@@ -66,7 +73,7 @@ class HttpView(HomeAssistantView):
 
         # 获取详情
         if _type == 'info':
-            data = sd.get(key)
+            data = await hass.async_add_executor_job(sd.get, key)
             if data is None:
                 return self.json_message("未找到数据", message_code='1')
             else:
@@ -84,13 +91,13 @@ class HttpView(HomeAssistantView):
         body = await request.json()
         key = body.get('key')
 
-        sd.add({
+        await hass.async_add_executor_job(sd.add, {
             'key': helper.Encrypt(key),
             'title': body.get('title'),
             'category': body.get('category'),
             'text': body.get('text'),
             'link': body.get('link'),
-            'date': datetime.datetime.now(cn).strftime('%Y-%m-%d')
+            'date': datetime.datetime.now(self.cn).strftime('%Y-%m-%d')
         })
         return self.json_message("添加成功", message_code='0')
 
@@ -100,13 +107,13 @@ class HttpView(HomeAssistantView):
         body = await request.json()
         key = body.get('key')
 
-        sd.update({
+        await hass.async_add_executor_job(sd.update, {
             'key': helper.Encrypt(key),
             'title': body.get('title'),
             'category': body.get('category'),
             'text': body.get('text'),
             'link': body.get('link'),
-            'date': datetime.datetime.now(cn).strftime('%Y-%m-%d')
+            'date': datetime.datetime.now(self.cn).strftime('%Y-%m-%d')
         })
         return self.json_message("更新成功", message_code='0')
 
@@ -116,5 +123,5 @@ class HttpView(HomeAssistantView):
         query = request.query
         key = query.get('key')
         
-        sd.delete(key)
+        await hass.async_add_executor_job(sd.delete, key)
         return self.json_message("删除成功", message_code='0')
