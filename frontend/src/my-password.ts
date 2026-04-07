@@ -7,10 +7,16 @@ import ha from './homeassistant.js'
 
 import '@material/web/button/filled-button.js'
 import '@material/web/button/filled-tonal-button.js'
+import '@material/web/button/outlined-button.js'
 import '@material/web/textfield/outlined-text-field.js'
 import '@material/web/list/list.js'
 import '@material/web/list/list-item.js'
 import '@material/web/dialog/dialog.js'
+import '@material/web/select/outlined-select.js'
+import '@material/web/select/select-option.js'
+import '@material/web/iconbutton/icon-button.js'
+import '@material/web/icon/icon.js'
+import '@material/web/fab/fab.js'
 
 
 interface IItem {
@@ -48,6 +54,12 @@ export class MyPassword extends LitElement {
   @property({ type: Boolean })
   showSearch = false
 
+  @property({ type: Boolean })
+  showCategoryDropdown = false
+
+  @property()
+  categoryFilter = ''
+
   dialogLoginRef = createRef()
   passwordRef = createRef()
 
@@ -62,66 +74,72 @@ export class MyPassword extends LitElement {
 
   render() {
     return html`
-    ${ha.passwordKey ? '' : html`<ha-dialog open ${ref(this.dialogLoginRef)} heading="我的密码">
-    
+    ${ha.passwordKey ? '' : html`<md-dialog open ${ref(this.dialogLoginRef)}>
+      <div slot="headline">我的密码</div>
+      <div slot="content">
         <md-outlined-text-field label="密钥" type="password" autofocus class="form-item" ${ref(this.passwordRef)}></md-outlined-text-field>
-    
-        
-      <md-filled-button slot="primaryAction" @click=${this._loginClick.bind(this)}>登录</md-filled-button>
-
-    </ha-dialog>`
+      </div>
+      <div slot="actions">
+        <md-filled-button slot="action" @click=${this._loginClick.bind(this)}>登录</md-filled-button>
+      </div>
+    </md-dialog>`
       }
 
-    <ha-dialog id="dialog-edit" ${ref(this.dialogEditRef)} heading="${this.key ? '密码信息' : '新增密码'}">
-      <div>
-        <md-outlined-text-field class="form-item" ${ref(this.categoryRef)} label="密码分类">
-          <ha-select slot="trailingicon" style="width: 130px;">
-          ${this.categories.map(ele => html`<md-list-item value="${ele}" @click="${() => (this.categoryRef.value as any).value = ele}">${ele}</md-list-item>`)}
-          </ha-select>
-        </md-outlined-text-field>
+    <md-dialog id="dialog-edit" ${ref(this.dialogEditRef)}>
+      <div slot="headline">${this.key ? '密码信息' : '新增密码'}</div>
+      <div slot="content">
+        <div class="combo-input">
+          <md-outlined-text-field id="category-input" class="form-item" ${ref(this.categoryRef)} label="密码分类" @input="${this._categoryInput.bind(this)}" @focus="${() => this.showCategoryDropdown = true}" @blur="${() => setTimeout(() => this.showCategoryDropdown = false, 150)}"></md-outlined-text-field>
+          ${this.showCategoryDropdown ? html`<div class="dropdown">
+            ${this.categories.filter(cat => !this.categoryFilter || cat.includes(this.categoryFilter)).map(cat => html`<div class="dropdown-item" @mousedown="${() => this._selectCategory(cat)}">${cat}</div>`)}
+            ${this.categories.filter(cat => !this.categoryFilter || cat.includes(this.categoryFilter)).length === 0 ? html`<div class="dropdown-item empty">无匹配分类</div>` : ''}
+          </div>` : ''}
+        </div>
         <md-outlined-text-field class="form-item" ${ref(this.titleRef)} type="textarea" rows="2" label="备注信息"></md-outlined-text-field>
         <md-outlined-text-field class="form-item" ${ref(this.textRef)} type="textarea" rows="5" label="加密内容"></md-outlined-text-field>
         <md-outlined-text-field class="form-item" ${ref(this.linkRef)} type="url" label="关联链接">
           <md-tonal-button slot="trailingicon" @click=${this._linkClick.bind(this)}>跳转</md-tonal-button>
         </md-outlined-text-field>
       </div>
-
-      <md-tonal-button slot="secondaryAction" @click=${{ handleEvent: () => (this.dialogEditRef.value as any).open = false }}>取消</md-tonal-button>    
-      ${this.key ? html`<md-tonal-button  slot="secondaryAction"  @click=${this._removeClick.bind(this)}>删除</md-tonal-button>` : ''}
-      <md-filled-button slot="primaryAction"  @click=${this._saveClick.bind(this)}>保存</md-filled-button>
-  
-    </ha-dialog>
-
-    <header class="app-header">
-      <div class="header-title" @click=${() => this.fire('hass-toggle-menu')}>我的密码</div>
-      <div class="header-actions">
-        <ha-icon-button @click=${{ handleEvent: () => this._searchClick() }}>
-          <ha-icon icon="mdi:magnify"></ha-icon>
-        </ha-icon-button>
-        <ha-icon-button @click=${{ handleEvent: () => this._addClick() }}>
-          <ha-icon icon="mdi:plus"></ha-icon>
-        </ha-icon-button>
+      <div slot="actions">
+        <md-outlined-button slot="action" @click=${{ handleEvent: () => (this.dialogEditRef.value as any).open = false }}>取消</md-outlined-button>    
+        ${this.key ? html`<md-outlined-button slot="action" @click=${this._removeClick.bind(this)}>删除</md-outlined-button>` : ''}
+        <md-filled-button slot="action" @click=${this._saveClick.bind(this)}>保存</md-filled-button>
       </div>
-    </header>
+    </md-dialog>
 
     ${this.showSearch ? html`<div class="search-panel">
-    <md-outlined-text-field label="搜索" ${ref(this.searchValueRef)} autofocus @input="${this._search.bind(this)}" >
-      <ha-select slot="trailingicon" ${ref(this.searchCategoryRef)} @change="${this._search.bind(this)}" style="width: 130px;">
-      <md-list-item value="">全部</md-list-item>
-      ${this.categories.map(ele => html`<md-list-item value="${ele}">${ele}</md-list-item>`)}
-      </ha-select>
-    </md-outlined-text-field>
+    <md-outlined-text-field label="搜索" ${ref(this.searchValueRef)} autofocus @input="${this._search.bind(this)}"></md-outlined-text-field>
+    <md-outlined-select ${ref(this.searchCategoryRef)} @change="${this._search.bind(this)}" style="width: 100px;">
+    <md-select-option value="">全部</md-select-option>
+    ${this.categories.map(ele => html`<md-select-option value="${ele}">${ele}</md-select-option>`)}
+    </md-outlined-select>
   </div>` : ''}
     
     <md-list style="min-width: 100%;">
       ${this.list.map((item, index) => html`<md-list-item @click=${{ handleEvent: () => this._onItemClick(item) }}>
        <div slot="headline">${item.title}</div>
        <div slot="supporting-text">${item.link}</div>
-       
-       <span slot="start" >${index + 1}</span>
-       
+       <div slot="start">${index + 1}</div>
       </md-list-item>`)}
     </md-list>
+
+    <div class="fab-container">
+      <md-fab @click=${this._searchClick.bind(this)} aria-label="搜索">
+        <md-icon slot="icon">
+          <svg viewBox="0 0 24 24">
+            <path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
+          </svg>
+        </md-icon>
+      </md-fab>
+      <md-fab @click=${this._addClick.bind(this)} aria-label="添加">
+        <md-icon slot="icon">
+          <svg viewBox="0 0 24 24">
+            <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+          </svg>
+        </md-icon>
+      </md-fab>
+    </div>
     `
   }
 
@@ -134,7 +152,7 @@ export class MyPassword extends LitElement {
 
   private _showLoginDialog() {
     const dialog: any = this.dialogLoginRef.value
-    dialog.show()
+    dialog.open = true
   }
 
   private async _loginClick() {
@@ -145,7 +163,7 @@ export class MyPassword extends LitElement {
       await ha.login(value)
 
       const dialog: any = this.dialogLoginRef.value
-      dialog.close()
+      dialog.open = false
       this.loadData()
     }
   }
@@ -165,6 +183,19 @@ export class MyPassword extends LitElement {
     }
   }
 
+  private _categoryInput() {
+    const field: any = this.categoryRef.value
+    this.categoryFilter = field?.value?.trim() || ''
+    this.showCategoryDropdown = true
+  }
+
+  private _selectCategory(cat: string) {
+    this._setValue(this.categoryRef.value, cat)
+    this.categoryFilter = cat
+    this.showCategoryDropdown = false
+  }
+
+
   private _search() {
     const searchValue: any = this.searchValueRef.value
     const searchCategory: any = this.searchCategoryRef.value
@@ -179,12 +210,13 @@ export class MyPassword extends LitElement {
 
     const dialog: any = this.dialogEditRef.value
     if (dialog) {
-      dialog.show()
+      dialog.open = true
       this.key = ''
       this._setValue(this.categoryRef.value, '')
       this._setValue(this.titleRef.value, '')
       this._setValue(this.textRef.value, '')
       this._setValue(this.linkRef.value, '')
+      this.showCategoryDropdown = false
     }
   }
 
@@ -204,7 +236,7 @@ export class MyPassword extends LitElement {
     if (res.code == 0) {
       this.loadData()
       const dialog: any = this.dialogEditRef.value
-      dialog.close()
+      dialog.open = false
     }
   }
 
@@ -217,7 +249,7 @@ export class MyPassword extends LitElement {
       if (res.code == 0) {
         this.loadData()
         const dialog: any = this.dialogEditRef.value
-        dialog.close()
+        dialog.open = false
       }
     }
   }
@@ -226,6 +258,7 @@ export class MyPassword extends LitElement {
     const dialog: any = this.dialogEditRef.value
     if (dialog) {
       dialog.open = true
+      this.showCategoryDropdown = false
       this._setValue(this.categoryRef.value, item.category)
       this._setValue(this.titleRef.value, item.title)
       this._setValue(this.linkRef.value, item.link || '')
@@ -254,9 +287,51 @@ export class MyPassword extends LitElement {
   .search-panel {
     padding: 16px;
     border-bottom: 1px solid var(--md-sys-color-outline);
+    display: flex;
+    gap: 16px;
+    align-items: flex-end;
   }
   .search-panel md-outlined-text-field {
+    flex: 1;
+  }
+  .search-category {
+    width: 120px;
+    min-width: 100px;
+  }
+  .combo-input {
+    position: relative;
     width: 100%;
+  }
+  .combo-input.search-category {
+    width: 120px;
+  }
+  .dropdown {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    right: 0;
+    z-index: 9999;
+    max-height: 240px;
+    overflow: auto;
+    background-color: var(--md-sys-color-surface, #fff);
+    opacity: 1;
+    border: 1px solid var(--md-sys-color-outline);
+    border-radius: 12px;
+    box-shadow: 0 12px 32px rgba(0,0,0,0.12);
+  }
+  .dropdown-item {
+    padding: 10px 14px;
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .dropdown-item:hover {
+    background: var(--md-sys-color-surface-variant);
+  }
+  .dropdown-item.empty {
+    color: var(--md-sys-color-outline);
+    cursor: default;
   }
   .app-header {
     display: flex;
@@ -273,6 +348,14 @@ export class MyPassword extends LitElement {
   }
   .header-actions {
     display: flex;
+    gap: 8px;
+  }
+  .fab-container {
+    position: fixed;
+    bottom: 16px;
+    right: 16px;
+    display: flex;
+    flex-direction: column;
     gap: 8px;
   }
   `
@@ -305,17 +388,6 @@ export class MyPassword extends LitElement {
   connectedCallback() {
     super.connectedCallback()
     this.loadData()
-
-    setTimeout(() => {
-      var sheet = new CSSStyleSheet()
-      sheet.replaceSync(`
-      .mdc-top-app-bar__row{ height: 56px; }
-      .mdc-top-app-bar__section { padding: 4px 12px; }`)
-
-      const appbar: any = this.shadowRoot?.querySelector('mwc-top-app-bar-fixed')?.shadowRoot
-
-      appbar.adoptedStyleSheets = [...appbar.adoptedStyleSheets, sheet]
-    }, 60)
   }
 }
 
