@@ -1,5 +1,4 @@
 import EncryptHelper from './EncryptHelper'
-import dayjs from 'dayjs'
 
 const PASSWORD_KEY = 'password-key'
 
@@ -29,7 +28,7 @@ class HomeAssistant {
         body = JSON.stringify(data)
         break;
     }
-    return document.querySelector('home-assistant').hass.fetchWithAuth(url, {
+    return top.document.querySelector('home-assistant').hass.fetchWithAuth(url, {
       method,
       body,
       headers: {
@@ -39,7 +38,10 @@ class HomeAssistant {
   }
 
   getToken(key) {
-    return EncryptHelper.prototype.md5(key + dayjs().format('YYYYMMDDHH'))
+    const now = new Date()
+    const pad = n => String(n).padStart(2, '0')
+    const dateStr = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}`
+    return EncryptHelper.prototype.md5(key + dateStr)
   }
 
   /**

@@ -5,8 +5,12 @@ import { createRef, ref } from 'lit/directives/ref.js';
 // @ts-ignore
 import ha from './homeassistant.js'
 
-import '@material/mwc-top-app-bar-fixed'
+import '@material/web/button/filled-button.js'
+import '@material/web/button/filled-tonal-button.js'
 import '@material/web/textfield/outlined-text-field.js'
+import '@material/web/list/list.js'
+import '@material/web/list/list-item.js'
+import '@material/web/dialog/dialog.js'
 
 
 interface IItem {
@@ -63,7 +67,7 @@ export class MyPassword extends LitElement {
         <md-outlined-text-field label="密钥" type="password" autofocus class="form-item" ${ref(this.passwordRef)}></md-outlined-text-field>
     
         
-      <mwc-button slot="primaryAction" raised @click=${this._loginClick.bind(this)}>登录</mwc-button>
+      <md-filled-button slot="primaryAction" @click=${this._loginClick.bind(this)}>登录</md-filled-button>
 
     </ha-dialog>`
       }
@@ -72,52 +76,52 @@ export class MyPassword extends LitElement {
       <div>
         <md-outlined-text-field class="form-item" ${ref(this.categoryRef)} label="密码分类">
           <ha-select slot="trailingicon" style="width: 130px;">
-          ${this.categories.map(ele => html`<mwc-list-item value="${ele}" @click="${() => (this.categoryRef.value as any).value = ele}">${ele}</mwc-list-item>`)}
+          ${this.categories.map(ele => html`<md-list-item value="${ele}" @click="${() => (this.categoryRef.value as any).value = ele}">${ele}</md-list-item>`)}
           </ha-select>
         </md-outlined-text-field>
         <md-outlined-text-field class="form-item" ${ref(this.titleRef)} type="textarea" rows="2" label="备注信息"></md-outlined-text-field>
         <md-outlined-text-field class="form-item" ${ref(this.textRef)} type="textarea" rows="5" label="加密内容"></md-outlined-text-field>
         <md-outlined-text-field class="form-item" ${ref(this.linkRef)} type="url" label="关联链接">
-          <mwc-button slot="trailingicon" @click=${this._linkClick.bind(this)}>跳转</mwc-button>
+          <md-tonal-button slot="trailingicon" @click=${this._linkClick.bind(this)}>跳转</md-tonal-button>
         </md-outlined-text-field>
       </div>
 
-      <mwc-button slot="secondaryAction" @click=${{ handleEvent: () => (this.dialogEditRef.value as any).open = false }}>取消</mwc-button>    
-      ${this.key ? html`<mwc-button  slot="secondaryAction" outlined  @click=${this._removeClick.bind(this)}>删除</mwc-button>` : ''}
-      <mwc-button slot="primaryAction" raised  @click=${this._saveClick.bind(this)}>保存</mwc-button>
+      <md-tonal-button slot="secondaryAction" @click=${{ handleEvent: () => (this.dialogEditRef.value as any).open = false }}>取消</md-tonal-button>    
+      ${this.key ? html`<md-tonal-button  slot="secondaryAction"  @click=${this._removeClick.bind(this)}>删除</md-tonal-button>` : ''}
+      <md-filled-button slot="primaryAction"  @click=${this._saveClick.bind(this)}>保存</md-filled-button>
   
     </ha-dialog>
 
-    <mwc-top-app-bar-fixed>
-      
-      <div slot="title" @click=${() => this.fire('hass-toggle-menu')} >我的密码</div>
-      <ha-icon-button slot="actionItems" @click=${{ handleEvent: () => this._searchClick() }}>
-        <ha-icon icon="mdi:magnify"></ha-icon>
-      </ha-icon-button> 
-      <ha-icon-button slot="actionItems" @click=${{ handleEvent: () => this._addClick() }}>
-        <ha-icon icon="mdi:plus"></ha-icon>
-      </ha-icon-button> 
-    </mwc-top-app-bar-fixed>
+    <header class="app-header">
+      <div class="header-title" @click=${() => this.fire('hass-toggle-menu')}>我的密码</div>
+      <div class="header-actions">
+        <ha-icon-button @click=${{ handleEvent: () => this._searchClick() }}>
+          <ha-icon icon="mdi:magnify"></ha-icon>
+        </ha-icon-button>
+        <ha-icon-button @click=${{ handleEvent: () => this._addClick() }}>
+          <ha-icon icon="mdi:plus"></ha-icon>
+        </ha-icon-button>
+      </div>
+    </header>
 
     ${this.showSearch ? html`<div class="search-panel">
     <md-outlined-text-field label="搜索" ${ref(this.searchValueRef)} autofocus @input="${this._search.bind(this)}" >
       <ha-select slot="trailingicon" ${ref(this.searchCategoryRef)} @change="${this._search.bind(this)}" style="width: 130px;">
-      <mwc-list-item value="">全部</mwc-list-item>
-      ${this.categories.map(ele => html`<mwc-list-item value="${ele}">${ele}</mwc-list-item>`)}
+      <md-list-item value="">全部</md-list-item>
+      ${this.categories.map(ele => html`<md-list-item value="${ele}">${ele}</md-list-item>`)}
       </ha-select>
     </md-outlined-text-field>
   </div>` : ''}
     
-    <mwc-list style="min-width: 100%;">
-      ${this.list.map((item, index) => html`<mwc-list-item twoline graphic="icon" @click=${{ handleEvent: () => this._onItemClick(item) }}>
-       <span>${item.title}</span>
-       <span slot="secondary">${item.link}</span>
+    <md-list style="min-width: 100%;">
+      ${this.list.map((item, index) => html`<md-list-item @click=${{ handleEvent: () => this._onItemClick(item) }}>
+       <div slot="headline">${item.title}</div>
+       <div slot="supporting-text">${item.link}</div>
        
-       <span slot="graphic" >${index + 1}</span>
+       <span slot="start" >${index + 1}</span>
        
-      </mwc-list-item>
-      <li divider role="separator"></li>`)}
-    </mwc-list>
+      </md-list-item>`)}
+    </md-list>
     `
   }
 
@@ -247,14 +251,29 @@ export class MyPassword extends LitElement {
     width: 100%;
     margin: 10px 0;
   }
-  .search-panel{
-    padding: 8px 8px 0 8px;
+  .search-panel {
+    padding: 16px;
+    border-bottom: 1px solid var(--md-sys-color-outline);
   }
-  .search-panel md-outlined-text-field{
+  .search-panel md-outlined-text-field {
     width: 100%;
   }
-  .mdc-top-app-bar{
-    height: 56px;
+  .app-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px;
+    background-color: var(--md-sys-color-surface-container);
+    border-bottom: 1px solid var(--md-sys-color-outline);
+  }
+  .header-title {
+    font-size: 20px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .header-actions {
+    display: flex;
+    gap: 8px;
   }
   `
 
