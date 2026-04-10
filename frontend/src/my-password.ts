@@ -18,7 +18,6 @@ import '@material/web/iconbutton/icon-button.js'
 import '@material/web/icon/icon.js'
 import '@material/web/fab/fab.js'
 
-
 interface IItem {
   key: string;
   title: string;
@@ -73,8 +72,11 @@ export class MyPassword extends LitElement {
   searchCategoryRef = createRef()
 
   render() {
-    return html`
-    ${ha.passwordKey ? '' : html`<md-dialog open ${ref(this.dialogLoginRef)}>
+    // 未授权
+    if (!ha.passwordKey) {
+      return html`<md-dialog 
+      @cancel=${(e: Event) => e.preventDefault()}
+      open ${ref(this.dialogLoginRef)}>
       <div slot="headline">我的密码</div>
       <div slot="content">
         <md-outlined-text-field label="密钥" type="password" autofocus class="form-item" ${ref(this.passwordRef)}></md-outlined-text-field>
@@ -83,13 +85,17 @@ export class MyPassword extends LitElement {
         <md-filled-button slot="action" @click=${this._loginClick.bind(this)}>登录</md-filled-button>
       </div>
     </md-dialog>`
-      }
+    }
 
+    return html`
     <md-dialog id="dialog-edit" ${ref(this.dialogEditRef)}>
       <div slot="headline">${this.key ? '密码信息' : '新增密码'}</div>
       <div slot="content">
         <div class="combo-input">
-          <md-outlined-text-field id="category-input" class="form-item" ${ref(this.categoryRef)} label="密码分类" @input="${this._categoryInput.bind(this)}" @focus="${() => this.showCategoryDropdown = true}" @blur="${() => setTimeout(() => this.showCategoryDropdown = false, 150)}"></md-outlined-text-field>
+          <md-outlined-text-field class="form-item" ${ref(this.categoryRef)} label="密码分类" 
+          @input="${this._categoryInput.bind(this)}" 
+          @click="${() => this.showCategoryDropdown = true}" 
+          @blur="${() => setTimeout(() => this.showCategoryDropdown = false, 150)}"></md-outlined-text-field>
           ${this.showCategoryDropdown ? html`<div class="dropdown">
             ${this.categories.filter(cat => !this.categoryFilter || cat.includes(this.categoryFilter)).map(cat => html`<div class="dropdown-item" @mousedown="${() => this._selectCategory(cat)}">${cat}</div>`)}
             ${this.categories.filter(cat => !this.categoryFilter || cat.includes(this.categoryFilter)).length === 0 ? html`<div class="dropdown-item empty">无匹配分类</div>` : ''}
@@ -109,8 +115,8 @@ export class MyPassword extends LitElement {
     </md-dialog>
 
     ${this.showSearch ? html`<div class="search-panel">
-    <md-outlined-text-field label="搜索" ${ref(this.searchValueRef)} autofocus @input="${this._search.bind(this)}"></md-outlined-text-field>
-    <md-outlined-select ${ref(this.searchCategoryRef)} @change="${this._search.bind(this)}" style="width: 100px;">
+    <md-outlined-text-field label="搜索" ${ref(this.searchValueRef)} @input="${this._search.bind(this)}"></md-outlined-text-field>
+    <md-outlined-select ${ref(this.searchCategoryRef)} @change="${this._search.bind(this)}">
     <md-select-option value="">全部</md-select-option>
     ${this.categories.map(ele => html`<md-select-option value="${ele}">${ele}</md-select-option>`)}
     </md-outlined-select>
@@ -173,11 +179,6 @@ export class MyPassword extends LitElement {
     this.showSearch = !this.showSearch
     if (this.showSearch) {
       this.source = JSON.parse(JSON.stringify(this.list))
-      // 获取焦点
-      setTimeout(() => {
-        const searchValue: any = this.searchValueRef.value
-        searchValue.focus()
-      }, 100)
     } else {
       this.list = JSON.parse(JSON.stringify(this.source))
     }
@@ -258,7 +259,6 @@ export class MyPassword extends LitElement {
     const dialog: any = this.dialogEditRef.value
     if (dialog) {
       dialog.open = true
-      this.showCategoryDropdown = false
       this._setValue(this.categoryRef.value, item.category)
       this._setValue(this.titleRef.value, item.title)
       this._setValue(this.linkRef.value, item.link || '')
@@ -268,6 +268,7 @@ export class MyPassword extends LitElement {
       const res = await ha.getInfo(item.key)
       this.key = res.key
       this._setValue(this.textRef.value, res.text)
+      this.showCategoryDropdown = false
     }
   }
 
@@ -291,19 +292,9 @@ export class MyPassword extends LitElement {
     gap: 16px;
     align-items: flex-end;
   }
-  .search-panel md-outlined-text-field {
-    flex: 1;
-  }
-  .search-category {
-    width: 120px;
-    min-width: 100px;
-  }
   .combo-input {
     position: relative;
     width: 100%;
-  }
-  .combo-input.search-category {
-    width: 120px;
   }
   .dropdown {
     position: absolute;
