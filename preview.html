@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>我的密码 · 界面预览</title>
+<style>
+  :root {
+    --primary-background-color: #f2f4f6;
+    --card-background-color: #ffffff;
+    --ha-card-background: #ffffff;
+    --ha-card-border-radius: 14px;
+    --ha-card-border-color: rgba(0,0,0,.10);
+    --primary-text-color: #212121;
+    --secondary-text-color: #727272;
+    --divider-color: rgba(0,0,0,.12);
+    --secondary-background-color: rgba(0,0,0,.045);
+    --primary-color: #03a9f4;
+    --text-primary-color: #ffffff;
+    --app-header-background-color: #03a9f4;
+    --app-header-text-color: #ffffff;
+    --sidebar-background-color: #ffffff;
+    --sidebar-text-color: #4b4b4b;
+    --sidebar-selected-background-color: rgba(3,169,244,.12);
+    --sidebar-icon-color: #5f6368;
+    --input-idle-line-color: rgba(0,0,0,.25);
+    --error-color: #d32f2f;
+  }
+  :root[data-theme="dark"] {
+    --primary-background-color: #101216;
+    --card-background-color: #1e2228;
+    --ha-card-background: #1e2228;
+    --ha-card-border-color: rgba(255,255,255,.10);
+    --primary-text-color: #e8eaed;
+    --secondary-text-color: #9aa0a6;
+    --divider-color: rgba(255,255,255,.12);
+    --secondary-background-color: rgba(255,255,255,.06);
+    --primary-color: #41bdf5;
+    --text-primary-color: #102027;
+    --app-header-background-color: #1e2228;
+    --app-header-text-color: #ffffff;
+    --sidebar-background-color: #171a1f;
+    --sidebar-text-color: #c9cdd2;
+    --sidebar-selected-background-color: rgba(65,189,245,.16);
+    --sidebar-icon-color: #aeb4ba;
+    --input-idle-line-color: rgba(255,255,255,.26);
+    --error-color: #ef7b7b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh;
+    font-family: "Segoe UI", Roboto, "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--primary-background-color); color: var(--primary-text-color);
+  }
+  .toolbar {
+    position: sticky; top: 0; z-index: 20;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px;
+    padding: 10px 18px; background: var(--card-background-color);
+    border-bottom: 1px solid var(--divider-color);
+  }
+  .brand { font-size: 15px; font-weight: 700; white-space: nowrap; }
+  .brand span { font-weight: 400; font-size: 12px; color: var(--secondary-text-color); margin-left: 6px; }
+  .group { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+  .label { font-size: 12px; color: var(--secondary-text-color); margin-right: 2px; }
+  .toolbar button {
+    font: inherit; font-size: 12px; padding: 6px 11px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--divider-color); background: transparent; color: var(--primary-text-color);
+  }
+  .toolbar button:hover { background: var(--secondary-background-color); }
+  .toolbar button.active { background: var(--primary-color); color: var(--text-primary-color); border-color: transparent; }
+  .toolbar .spacer { flex: 1; }
+  .tip { font-size: 12px; color: var(--secondary-text-color); white-space: nowrap; }
+  .tip code { padding: 2px 6px; border-radius: 5px; background: var(--secondary-background-color); }
+  .frame { display: flex; min-height: calc(100vh - 53px); }
+  .sidebar {
+    width: 232px; flex: none; padding: 12px 10px;
+    background: var(--sidebar-background-color); color: var(--sidebar-text-color);
+    border-right: 1px solid var(--divider-color);
+  }
+  .sidebar-head { display: flex; align-items: center; gap: 10px; padding: 8px 10px 18px; font-size: 14px; font-weight: 600; }
+  .nav-item { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 10px; font-size: 14px; margin-bottom: 2px; }
+  .nav-item.active { background: var(--sidebar-selected-background-color); color: var(--primary-color); font-weight: 600; }
+  .ico {
+    width: 22px; height: 22px; border-radius: 7px; display: inline-flex;
+    align-items: center; justify-content: center; font-size: 13px;
+    background: var(--secondary-background-color); color: var(--sidebar-icon-color);
+  }
+  .content { flex: 1; min-width: 0; padding: 0; }
+  .view-head { padding: 12px 20px; font-size: 13px; color: var(--secondary-text-color); }
+  #mount { width: 100%; }
+  .custom-header {
+    display: flex; align-items: center; gap: 12px; min-height: 64px; padding: 0 20px;
+    border-radius: 0 0 14px 14px; color: #fff;
+    background: linear-gradient(100deg, #5b3df5, #03a9f4);
+  }
+  .custom-menu { border: none; background: rgba(255,255,255,.18); color: #fff; font-size: 18px; padding: 4px 10px; border-radius: 8px; cursor: pointer; }
+  .custom-title { font-size: 18px; font-weight: 700; }
+  .custom-title small { font-size: 12px; font-weight: 400; opacity: .85; margin-left: 8px; }
+  .custom-hint { margin-left: auto; font-size: 12px; opacity: .85; }
+  .boot {
+    max-width: 760px; margin: 40px auto; padding: 22px 26px; border-radius: 14px;
+    background: var(--card-background-color); border: 1px solid var(--divider-color); line-height: 1.7; font-size: 14px;
+  }
+  .boot code { padding: 2px 6px; border-radius: 5px; background: var(--secondary-background-color); }
+  @media (max-width: 900px) {
+    .sidebar { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+  <div class="brand">我的密码 <span>界面预览</span></div>
+  <div class="group">
+    <span class="label">状态</span>
+    <button data-state="locked">锁定</button>
+    <button data-state="unlocked">已解锁</button>
+    <button data-state="edit">编辑弹窗</button>
+    <button data-state="credentials">指纹与凭据</button>
+  </div>
+  <div class="spacer"></div>
+  <button id="customHeader">自定义头部</button>
+  <button id="theme">切换深色</button>
+  <button id="reset">重置数据</button>
+  <div class="tip">主密码 <code>demo1234</code> · 快捷键 <code>1–4</code> 状态 <code>T</code> 主题 <code>Esc</code> 关弹窗</div>
+</div>
+
+<div id="boot" class="boot">
+  <strong>正在准备预览…</strong>
+  <p>如果这个提示一直不消失，说明页面是通过 <code>file://</code> 直接打开的。ES modules 与 WebCrypto 需要安全上下文，请在项目根目录执行
+  <code>py -m http.server 8000</code>，然后访问 <code>http://localhost:8000/preview.html</code>。</p>
+</div>
+
+<div class="frame">
+  <aside class="sidebar">
+    <div class="sidebar-head"><span class="ico">⌂</span> Home Assistant</div>
+    <div class="nav-item"><span class="ico">▤</span> 概览</div>
+    <div class="nav-item"><span class="ico">◷</span> 历史记录</div>
+    <div class="nav-item"><span class="ico">◈</span> 自动化</div>
+    <div class="nav-item"><span class="ico">⚙</span> 设置</div>
+    <div class="nav-item active"><span class="ico">◆</span> 我的密码</div>
+  </aside>
+  <main class="content">
+    <div class="view-head" id="viewHead">侧边栏面板 · 模拟 HomeAssistant 框架，主题变量与真实环境一致</div>
+    <div id="mount"></div>
+  </main>
+</div>
+
+<script type="module">
+import './custom_components/password/www/src/main.js';
+import { createApi } from './custom_components/password/www/src/api.js';
+import { Vault } from './custom_components/password/www/src/vault.js';
+
+const DEMO_PASSWORD = 'demo1234';
+const STORE_KEY = 'preview.password.vault';
+const WRAP_KEY = 'password.webauthn.wraps';
+const CRED_ID = 'preview-credential-id';
+
+const SAMPLE_ITEMS = [
+  { id: 'p1', title: 'HomeAssistant 管理员', category: '智能家居', text: 'admin / Ha#2026!demo', link: 'https://www.home-assistant.io', date: '2026-11-01' },
+  { id: 'p2', title: '路由器后台', category: '网络设备', text: 'admin / Router@2026', link: 'http://192.168.1.1', date: '2026-10-28' },
+  { id: 'p3', title: '邮箱账号', category: '账号', text: 'demo@example.com / Mail#8899', link: 'https://mail.example.com', date: '2026-10-12' },
+  { id: 'p4', title: '宽带客服工单', category: '账号', text: '客服编号 8801 / 查询密码 6623', link: '', date: '2026-09-30' },
+  { id: 'p5', title: 'NAS 登录', category: '智能家居', text: 'demo / Nas!2026demo', link: 'http://nas.local', date: '2026-09-18' },
+  { id: 'p6', title: '演示：很长的备注信息用来观察列表在窄屏下的截断与省略效果是否正常显示', category: '其他', text: 'line1\nline2\nline3', link: 'https://example.com/very/long/path', date: '2026-08-05' },
+];
+
+const CREDENTIALS = [
+  { id: CRED_ID, name: 'Windows Hello（演示）', created: '2026-11-10 09:12' },
+  { id: 'preview-credential-2', name: '笔记本（演示）', created: '2026-11-08 20:31' },
+];
+
+// 让预览环境认为存在平台认证器，以便展示「指纹解锁」按钮
+if (!window.PublicKeyCredential) window.PublicKeyCredential = class {};
+try {
+  Object.defineProperty(PublicKeyCredential, 'isUserVerifyingPlatformAuthenticatorAvailable', {
+    value: async () => true, writable: true, configurable: true,
+  });
+} catch (err) {
+  // 浏览器不允许覆盖时退化为真实检测结果，不影响其它预览功能
+}
+if (!localStorage.getItem(WRAP_KEY)) {
+  localStorage.setItem(WRAP_KEY, JSON.stringify({
+    [CRED_ID]: { iv: 'AAAAAAAAAAAAAAAA', ct: 'AAAAAAAAAAAAAAAAAAAAAA==', name: 'Windows Hello（演示）', created: '2026-11-10 09:12' },
+  }));
+}
+
+let store = { vault: null };
+try {
+  store.vault = JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
+} catch (err) {
+  store.vault = null;
+}
+
+function persist() {
+  localStorage.setItem(STORE_KEY, JSON.stringify(store.vault));
+}
+
+function publicVault(vault) {
+  const result = { ...vault };
+  delete result.verifier;
+  return result;
+}
+
+function reply(data, message = null) {
+  if (message) throw new Error(message);
+  return data;
+}
+
+async function callWS(message) {
+  const command = String(message.type || '').replace('password/', '');
+
+  if (command === 'vault/get') {
+    return reply(store.vault
+      ? { exists: true, vault: publicVault(store.vault) }
+      : { exists: false, vault: null, masterPassword: DEMO_PASSWORD });
+  }
+
+  if (command === 'vault/put') {
+    if (message.create) {
+      if (store.vault) return reply(null, '密码库已初始化');
+      store.vault = { ...message.vault, revision: 1, updated: new Date().toISOString() };
+      persist();
+      return reply({ revision: 1, updated: store.vault.updated });
+    }
+    if (!store.vault) return reply(null, '密码库尚未初始化');
+    if (message.unlockProof !== store.vault.verifier) return reply(null, '未解锁或密钥不匹配');
+    if (message.revision !== store.vault.revision) return reply(null, '数据已被其它页面修改，请刷新后重试');
+    const revision = store.vault.revision + 1;
+    store.vault = { ...message.vault, revision, updated: new Date().toISOString() };
+    persist();
+    return reply({ revision, updated: store.vault.updated });
+  }
+
+  if (command === 'webauthn/credentials/list') return reply(CREDENTIALS);
+  if (command === 'webauthn/credentials/delete') return reply({});
+  if (command.startsWith('webauthn/')) {
+    return reply(null, '预览模式不支持真实指纹验证，请用主密码 demo1234 解锁');
+  }
+  return reply(null, '未知命令');
+}
+
+const hass = { callWS };
+const api = createApi(hass);
+
+async function ensureVault() {
+  if (store.vault) return;
+  const vault = new Vault(api);
+  await vault.initialize(DEMO_PASSWORD, SAMPLE_ITEMS);
+}
+
+function waitFor(check, timeout = 10000) {
+  return new Promise((resolve, reject) => {
+    const started = Date.now();
+    const tick = () => {
+      const value = check();
+      if (value) return resolve(value);
+      if (Date.now() - started > timeout) return reject(new Error('预览初始化超时'));
+      setTimeout(tick, 40);
+    };
+    tick();
+  });
+}
+
+const CUSTOM_HEADER_HTML = `
+  <div class="custom-header">
+    <button class="custom-menu" data-action="toggle-menu" aria-label="打开侧边栏">☰</button>
+    <div class="custom-title">保险柜 <small>自定义头部示例</small></div>
+    <span class="custom-hint">setHeader() 注入 · 样式由页面自行提供</span>
+  </div>`;
+
+let currentState = 'unlocked';
+let customHeaderOn = false;
+
+function getView(element) {
+  const card = element.shadowRoot && element.shadowRoot.querySelector('password-vault-card');
+  return card && card.view ? card.view : null;
+}
+
+async function applyState(state, view) {
+  await ensureVault();
+  await view.vault.load();
+  view.vault.lock();
+  view.screen = 'locked';
+  view.render();
+
+  if (state === 'locked') return;
+
+  try {
+    await view.vault.unlockWithPassword(DEMO_PASSWORD);
+  } catch (err) {
+    view.toast(`演示数据已被修改：${err.message}，可点击「重置数据」恢复`);
+    return;
+  }
+  view.screen = 'unlocked';
+  view.render();
+  view.resetIdle();
+
+  if (state === 'edit') {
+    const first = view.vault.items[0];
+    if (first) view.openEdit(first.id);
+    else view.toast('没有可编辑的演示数据');
+  }
+  if (state === 'credentials') await view.openCredentials();
+  if (state === 'edit' || state === 'credentials') {
+    const dialog = view.root.querySelector('dialog[data-dialog]');
+    const cancel = dialog && dialog.querySelector('[data-act="cancel"]');
+    if (cancel) cancel.focus({ preventScroll: true });
+  }
+}
+
+async function mount(state = currentState) {
+  currentState = state;
+  document.querySelectorAll('[data-state]').forEach((button) => {
+    button.classList.toggle('active', button.dataset.state === state);
+  });
+  document.getElementById('viewHead').textContent =
+    '侧边栏面板 · 模拟 HomeAssistant 框架，主题变量与真实环境一致';
+
+  const mountPoint = document.getElementById('mount');
+  mountPoint.innerHTML = '';
+  const element = document.createElement('password-panel');
+  mountPoint.appendChild(element);
+  element.hass = hass;
+
+  const view = await waitFor(() => {
+    const candidate = getView(element);
+    return candidate && candidate.screen !== 'loading' ? candidate : null;
+  });
+  await applyState(state, view);
+  element.setHeader(customHeaderOn ? CUSTOM_HEADER_HTML : '');
+}
+
+document.querySelectorAll('[data-state]').forEach((button) => {
+  button.addEventListener('click', () => mount(button.dataset.state).catch(showError));
+});
+document.addEventListener('keydown', (event) => {
+  const origin = event.composedPath()[0];
+  if (origin instanceof Element && origin.matches('input, textarea, select, [contenteditable]')) return;
+  const states = { '1': 'locked', '2': 'unlocked', '3': 'edit', '4': 'credentials' };
+  if (states[event.key]) {
+    mount(states[event.key]).catch(showError);
+    return;
+  }
+  const key = event.key.toLowerCase();
+  if (key === 't') {
+    document.getElementById('theme').click();
+  } else if (key === 'r') {
+    document.getElementById('reset').click();
+  }
+});
+
+document.getElementById('customHeader').addEventListener('click', (event) => {
+  customHeaderOn = !customHeaderOn;
+  event.currentTarget.textContent = customHeaderOn ? '移除自定义头部' : '自定义头部';
+  event.currentTarget.classList.toggle('active', customHeaderOn);
+  const panel = document.querySelector('#mount password-panel');
+  if (panel) panel.setHeader(customHeaderOn ? CUSTOM_HEADER_HTML : '');
+});
+document.getElementById('theme').addEventListener('click', (event) => {
+  const dark = document.documentElement.dataset.theme === 'dark';
+  document.documentElement.dataset.theme = dark ? 'light' : 'dark';
+  event.currentTarget.textContent = dark ? '切换深色' : '切换浅色';
+  event.currentTarget.classList.toggle('active', !dark);
+});
+document.getElementById('reset').addEventListener('click', () => {
+  store.vault = null;
+  localStorage.removeItem(STORE_KEY);
+  ensureVault().then(() => mount('unlocked')).catch(showError);
+});
+
+function showError(err) {
+  const boot = document.getElementById('boot');
+  if (boot) boot.innerHTML = `<strong>预览出错</strong><p>${String(err && err.message || err)}</p>`;
+}
+
+await ensureVault();
+document.getElementById('boot').remove();
+await mount('unlocked');
+</script>
+</body>
+</html>

@@ -1,19 +1,18 @@
-import os
-from homeassistant.util.json import load_json
+"""读取集成清单，供注册面板与缓存穿透使用。"""
+from __future__ import annotations
 
-CURRENT_PATH = os.path.dirname(__file__)
+import json
+from pathlib import Path
 
-class Manifest():
 
-    def __init__(self):
-        self.manifest_path = f'{CURRENT_PATH}/manifest.json'
-        self.update()
+class Manifest:
+    def __init__(self) -> None:
+        path = Path(__file__).with_name('manifest.json')
+        data = json.loads(path.read_text(encoding='utf-8'))
+        self.domain: str = data['domain']
+        self.name: str = data['name']
+        self.version: str = data['version']
+        self.documentation: str = data.get('documentation', '')
 
-    def update(self):
-        data = load_json(self.manifest_path, {})
-        self.domain = data.get('domain')
-        self.name = data.get('name')
-        self.version = data.get('version')
-        self.documentation = data.get('documentation')
 
 manifest = Manifest()

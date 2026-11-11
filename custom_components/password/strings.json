@@ -1,0 +1,20 @@
+{
+  "title": "我的密码",
+  "config": {
+    "step": {
+      "user": {
+        "description": "设置主密码并决定面板是否仅管理员可见。主密码保存在 HomeAssistant 配置中，用于首次自动创建密码库。",
+        "data": {
+          "master_password": "主密码（至少 8 位）",
+          "require_admin": "仅管理员可访问"
+        }
+      }
+    },
+    "error": {
+      "weak_password": "主密码至少需要 8 位"
+    },
+    "abort": {
+      "single_instance_allowed": "仅允许单个配置"
+    }
+  }
+}

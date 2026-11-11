@@ -1,67 +1,66 @@
+"""密码库与 WebAuthn 凭据的本地存储。
+
+使用标准库做原子写，避免依赖 HomeAssistant 内部 JSON helper；
+所有同步 IO 都由调用方通过 hass.async_add_executor_job 执行。
+"""
+from __future__ import annotations
+
+import json
 import os
-from homeassistant.util.json import load_json
-from homeassistant.helpers.json import save_json
-from homeassistant.helpers.storage import STORAGE_DIR
-from homeassistant.core import async_get_hass
+import threading
 from pathlib import Path
+from typing import Any
 
-class StorageData():
+VAULT_FILE = 'password_vault.json'
+CREDENTIALS_FILE = 'password_webauthn.json'
+STORAGE_DIR = '.storage'
 
-    def __init__(self, filename) -> None:
-        self.file_path = f'{Path(__file__).resolve().parent.parent.parent}/{STORAGE_DIR}/{filename}.json'
-        # print(self.file_path)
 
-    async def get_uuid(self):
-        ''' 获取唯一标识 '''
-        hass = async_get_hass()
-        config_path = hass.config.path(f'{STORAGE_DIR}/core.uuid')
-        result = await hass.async_add_executor_job(load_json, config_path)
-        return result['data']['uuid']
+class VaultStorage:
 
-    def load(self):
-        '''读取'''
-        return load_json(self.file_path, [])
+    def __init__(self, hass) -> None:
+        self._dir = Path(hass.config.path(STORAGE_DIR))
+        self._lock = threading.Lock()
 
-    def get(self, key):
-        '''获取数据'''
-        result = self.load()
-        for item in result:
-            if item['key'] == key:
-                return item
+    def _path(self, name: str) -> Path:
+        return self._dir / name
 
-    def add(self, data):
-        '''添加'''
-        result = self.load()
-        result.append(data)
-        save_json(self.file_path, result)
-        return result
+    def _read(self, name: str, default: Any) -> Any:
+        path = self._path(name)
+        try:
+            with path.open('r', encoding='utf-8') as file:
+                return json.load(file)
+        except FileNotFoundError:
+            return default
+        except (ValueError, OSError):
+            return default
 
-    def update(self, data):
-        '''更新'''
-        result = self.load()
-        is_edit = False
-        for index, item in enumerate(result):
-            if item['key'] == data['key']:
-                result[index] = data
-                is_edit = True
-                break
-        if is_edit:
-            save_json(self.file_path, result)
-        return result
+    def _write(self, name: str, data: Any) -> None:
+        self._dir.mkdir(parents=True, exist_ok=True)
+        path = self._path(name)
+        tmp = path.with_name(path.name + '.tmp')
+        with tmp.open('w', encoding='utf-8') as file:
+            json.dump(data, file, ensure_ascii=False, separators=(',', ':'))
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(tmp, path)
 
-    def delete(self, key):
-        '''删除'''
-        result = self.load()
-        del_index = None
-        for index, item in enumerate(result):
-            if item['key'] == key:
-                del_index = index
-                break
-        if del_index is not None:
-            del result[del_index]
-            save_json(self.file_path, result)
-        return result
+    def load_vault(self) -> dict | None:
+        with self._lock:
+            data = self._read(VAULT_FILE, None)
+        return data if isinstance(data, dict) else None
 
-    def save(self, data):
-        '''保存文件'''
-        save_json(self.file_path, data)
+    def save_vault(self, vault: dict) -> None:
+        with self._lock:
+            self._write(VAULT_FILE, vault)
+
+    def load_credentials(self) -> dict:
+        with self._lock:
+            data = self._read(CREDENTIALS_FILE, None)
+        if not isinstance(data, dict) or not isinstance(data.get('credentials'), list):
+            return {'version': 2, 'credentials': []}
+        return data
+
+    def save_credentials(self, data: dict) -> None:
+        with self._lock:
+            self._write(CREDENTIALS_FILE, data)

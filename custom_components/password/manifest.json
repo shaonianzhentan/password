@@ -1,13 +1,15 @@
 {
   "domain": "password",
-  "name": "\u6211\u7684\u5BC6\u7801",
-  "version": "2026.4.7",
+  "name": "我的密码",
+  "version": "2026.11.0",
   "config_flow": true,
   "documentation": "https://github.com/shaonianzhentan/password",
   "requirements": [
-    "pyDes>=2.0.1"
+    "cbor2>=5.4.6"
   ],
-  "dependencies": [],
+  "dependencies": [
+    "panel_custom"
+  ],
   "codeowners": [
     "@shaonianzhentan"
   ]

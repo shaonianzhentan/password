@@ -1,63 +1,64 @@
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
-import homeassistant.helpers.config_validation as cv
+"""我的密码 —— HomeAssistant 自定义集成。
+
+注册侧边栏自定义面板（顶层 Custom Element，非 iframe）与 websocket 命令。
+前端 JS 由 panel_custom 的 module_url 直接加载，业务请求全部走 HA 自身的
+websocket 通道，不注册自定义 HTTP 端点。
+"""
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+
 from homeassistant.components.frontend import async_remove_panel
 from homeassistant.components.http import StaticPathConfig
-from homeassistant.components.frontend import async_register_built_in_panel, async_remove_panel
+from homeassistant.components import panel_custom
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
 
-from .http import HttpView
 from .manifest import manifest
-from .storage import StorageData
-from .EncryptHelper import EncryptHelper
+from .websocket import async_register_commands
 
-sd = StorageData('password')
-
+_LOGGER = logging.getLogger(__name__)
 DOMAIN = manifest.domain
-CONFIG_SCHEMA = cv.deprecated(DOMAIN)
+STATIC_URL = f'/{DOMAIN}'
+MODULE_URL = f'{STATIC_URL}/password-panel.js?v={manifest.version}'
+
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    domain_data = hass.data.setdefault(DOMAIN, {})
 
-    url_path = entry.entry_id
-    config = entry.data
-    require_admin = config.get('require_admin', True)
+    # websocket 命令与静态路径没有反注册接口，重载时只注册一次
+    if not domain_data.get('commands_registered'):
+        async_register_commands(hass)
+        domain_data['commands_registered'] = True
+    if not domain_data.get('static_registered'):
+        www = str(Path(__file__).parent / 'www')
+        await hass.http.async_register_static_paths([
+            StaticPathConfig(STATIC_URL, www, False)
+        ])
+        domain_data['static_registered'] = True
 
-    # 保存密钥
-    server_key = config.get('key')
-    hass.data.setdefault(f'{DOMAIN}-key', server_key)
+    try:
+        async_remove_panel(hass, DOMAIN)
+    except Exception:  # 面板尚未注册
+        pass
 
-    hass.http.register_view(HttpView)
-    url = f'/{url_path}'
-    await hass.http.async_register_static_paths([
-        StaticPathConfig(url, hass.config.path(f"custom_components/{DOMAIN}/www"), False)
-    ])
-
-
-    async_register_built_in_panel(
+    await panel_custom.async_register_panel(
         hass,
-        "iframe",
-        sidebar_title=manifest.name,
-        sidebar_icon="mdi:book-lock-outline",
+        webcomponent_name='password-panel',
         frontend_url_path=DOMAIN,
-        config={"url": f"{url_path}/index.html?v={manifest.version}"},
-        require_admin=require_admin
+        sidebar_title=manifest.name,
+        sidebar_icon='mdi:book-lock-outline',
+        module_url=MODULE_URL,
+        config={'version': manifest.version},
+        require_admin=entry.data.get('require_admin', True),
     )
-
-    # 判断是否异常
-    _list = await hass.async_add_executor_job(sd.load)
-    if len(_list) > 0:
-        item = _list[0]
-        helper = EncryptHelper(server_key, await sd.get_uuid())
-        try:
-            helper.Decrypt(item['key'])
-        except Exception as ex:
-            print(ex)
-            await hass.services.async_call('persistent_notification', 'create', {
-                'title': manifest.name,
-                'message': '当前密码文件无法解密，请在集成选项中输入MAC值更新密码文件'
-            })
     return True
 
+
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    async_remove_panel(hass, 'my-password')
-    await hass.async_add_executor_job(manifest.update)
+    try:
+        async_remove_panel(hass, DOMAIN)
+    except Exception as err:
+        _LOGGER.debug('移除面板失败：%s', err)
     return True
