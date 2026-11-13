@@ -19,13 +19,19 @@ export function createApi(hass) {
     try {
       return await hass.callWS({ type: PREFIX + command, ...payload });
     } catch (err) {
-      throw new Error((err && err.message) || '请求失败');
+      const error = new Error((err && err.message) || '请求失败');
+      // 保留 HA 的错误码，device_mismatch 用于切换到设备恢复界面
+      error.code = err && err.code;
+      throw error;
     }
   }
 
   return {
     getVault: () => call('vault/get'),
     putVault: (payload) => call('vault/put', payload),
+    convertLegacy: (payload) => call('legacy/convert', payload),
+    getDeviceInfo: () => call('device/info'),
+    recoverDevice: (oldUuid) => call('device/recover', { oldUuid }),
     registerOptions: () => call('webauthn/register/options', withOrigin()),
     registerVerify: (payload) => call(
       'webauthn/register/verify', withOrigin(payload)

@@ -2,8 +2,12 @@
 
 不注册任何自定义 HTTP 端点：所有请求都走 HA 已鉴权的 websocket 连接，
 按 connection.user 做管理员校验，命令与响应不出现在 URL 或访问日志中。
-vault 的条目元数据是明文，敏感字段由前端逐条加密；服务端只做结构校验，
-写操作需要 unlockProof（由 vaultKey 派生的 HMAC）与 revision 乐观锁。
+
+服务端零知识：主密码只在浏览器内存，config entry 不保存任何密码材料；
+密码库在磁盘上由 core.uuid 派生的设备密钥整体包裹（见 device.py），
+服务端读写时自动解开/包裹，前端仍只见 format 2 的密码库。
+vault 的条目元数据对服务端可见，敏感字段由前端逐条加密；服务端只做结构
+校验，写操作需要 unlockProof（由 vaultKey 派生的 HMAC）与 revision 乐观锁。
 """
 from __future__ import annotations
 
@@ -18,6 +22,8 @@ import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 
+from . import device
+from . import legacy
 from . import webauthn as wa
 from .manifest import manifest
 from .storage import VaultStorage
@@ -26,10 +32,15 @@ _LOGGER = logging.getLogger(__name__)
 DOMAIN = manifest.domain
 PREFIX = f'{DOMAIN}/'
 VAULT_FIELDS = ('format', 'kdf', 'wrapped', 'items', 'verifier')
+# 旧版 password.json 通过 websocket 上传，拒绝任意大的消息体
+MAX_LEGACY_CONTENT = 2_000_000
 
 COMMANDS = (
     f'{PREFIX}vault/get',
     f'{PREFIX}vault/put',
+    f'{PREFIX}legacy/convert',
+    f'{PREFIX}device/info',
+    f'{PREFIX}device/recover',
     f'{PREFIX}webauthn/register/options',
     f'{PREFIX}webauthn/register/verify',
     f'{PREFIX}webauthn/authenticate/options',
@@ -51,6 +62,16 @@ COMMAND_SCHEMAS: dict[str, dict] = {
         vol.Optional('create'): bool,
         vol.Optional('unlockProof'): str,
         vol.Optional('revision'): int,
+    },
+    'legacy/convert': {
+        vol.Required('content'): str,
+        vol.Required('secret'): str,
+        vol.Required('unlockProof'): str,
+        vol.Optional('uuid'): str,
+    },
+    'device/info': {},
+    'device/recover': {
+        vol.Required('oldUuid'): str,
     },
     'webauthn/register/options': {**_ORIGIN_KEY},
     'webauthn/register/verify': {
@@ -182,15 +203,29 @@ async def _save_credentials(hass, data: dict) -> None:
 # --------------------------------------------------------------------- vault
 
 async def _vault_get(hass, connection, msg, host):
+    info = await hass.async_add_executor_job(_storage(hass).device_info)
+    common = {
+        'deviceUuid': info['uuid'],
+        'canManageDevice': bool(connection.user and connection.user.is_admin),
+    }
     vault = await _load_vault(hass)
     if vault is None:
+        # 不再下发主密码：首次建库由前端在浏览器内收集并派生
         return {
             'exists': False,
             'vault': None,
-            'masterPassword': _config_value(hass, 'master_password'),
+            'deviceId': '',
+            'deviceWrapped': False,
+            **common,
         }
     public = {key: value for key, value in vault.items() if key != 'verifier'}
-    return {'exists': True, 'vault': public}
+    return {
+        'exists': True,
+        'vault': public,
+        'deviceId': info['id'],
+        'deviceWrapped': info['wrapped'],
+        **common,
+    }
 
 
 async def _vault_put(hass, connection, msg, host):
@@ -215,6 +250,76 @@ async def _vault_put(hass, connection, msg, host):
     clean['updated'] = datetime.now(timezone.utc).isoformat()
     await hass.async_add_executor_job(_storage(hass).save_vault, clean)
     return {'revision': clean['revision'], 'updated': clean['updated']}
+
+
+# ------------------------------------------------------------- 设备层恢复
+
+async def _device_info(hass, connection, msg, host):
+    """设备 UUID 不匹配时，前端仍需要显示「当前」UUID 以对照旧值。"""
+    info = await hass.async_add_executor_job(_storage(hass).device_info)
+    return {
+        'deviceUuid': info['uuid'],
+        'deviceId': info['id'],
+        'deviceWrapped': info['wrapped'],
+    }
+
+
+async def _device_recover(hass, connection, msg, host):
+    """用旧 UUID 解开 envelope，再用当前 UUID 重新包裹（仅处理密文）。
+
+    不要求 unlockProof：解不开外层时前端根本拿不到 wrapped.password，
+    也就无法解锁，要求解锁证明会形成死锁。GCM tag 即旧 UUID 正确的证明。
+    """
+    user = connection.user
+    if not user or not user.is_admin:
+        raise WsError('not_allowed', '仅管理员可执行设备重新绑定')
+    old_uuid = str(msg.get('oldUuid') or '').strip()
+    if not old_uuid:
+        raise WsError('invalid_format', '请填写旧 HomeAssistant 的 UUID')
+    try:
+        done = await hass.async_add_executor_job(_storage(hass).recover, old_uuid)
+        info = await hass.async_add_executor_job(_storage(hass).device_info)
+    except device.DeviceError as err:
+        raise WsError('device_mismatch', str(err)) from err
+    return {
+        'vault': done['vault'],
+        'credentials': done['credentials'],
+        'deviceUuid': info['uuid'],
+        'deviceId': info['id'],
+    }
+
+
+# ----------------------------------------------------------- 旧版历史数据转换
+
+async def _legacy_convert(hass, connection, msg, host):
+    """解密旧版 3DES 文件，返回新版明文字段；明文只在已解锁的浏览器内存里。"""
+    vault = await _load_vault(hass)
+    if not _proof_ok(vault, msg.get('unlockProof')):
+        raise WsError('not_allowed', '请先解锁密码库')
+
+    content = str(msg.get('content') or '')
+    if not content or len(content) > MAX_LEGACY_CONTENT:
+        raise WsError('invalid_format', '历史数据文件为空或超过 2MB 上限')
+    try:
+        server_key = legacy.server_key_from_secret(msg.get('secret'))
+        given_uuid = str(msg.get('uuid') or '').strip()
+        old_uuid = given_uuid or await hass.async_add_executor_job(
+            legacy.read_uuid, hass.config.path('.storage', 'core.uuid')
+        )
+        entries = legacy.parse_entries(content)
+        items, failures = legacy.convert_entries(entries, server_key, old_uuid)
+    except legacy.LegacyError as err:
+        raise WsError('invalid_format', str(err)) from err
+
+    if not items:
+        hint = failures[0] if failures else '文件中没有条目'
+        raise WsError('invalid_format', f'没有可导入的记录：{hint}')
+    return {
+        'items': items,
+        'total': len(entries),
+        'converted': len(items),
+        'failures': failures[:20],
+    }
 
 
 # ------------------------------------------------------------------ WebAuthn
@@ -348,6 +453,9 @@ async def _credentials_delete(hass, connection, msg, host):
 HANDLERS = {
     'vault/get': _vault_get,
     'vault/put': _vault_put,
+    'legacy/convert': _legacy_convert,
+    'device/info': _device_info,
+    'device/recover': _device_recover,
     'webauthn/register/options': _register_options,
     'webauthn/register/verify': _register_verify,
     'webauthn/authenticate/options': _auth_options,
@@ -377,6 +485,10 @@ async def _execute(hass: HomeAssistant, connection, msg, command: str) -> None:
         result = await handler(hass, connection, msg, host)
     except WsError as err:
         connection.send_error(msg['id'], err.code, err.message)
+        return
+    except device.DeviceError as err:
+        # 设备 UUID 不匹配：前端据此进入「指定旧 UUID」恢复界面
+        connection.send_error(msg['id'], 'device_mismatch', str(err))
         return
     except Exception:
         _LOGGER.exception('处理 password/%s 失败', command)

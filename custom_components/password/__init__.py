@@ -28,6 +28,25 @@ STATIC_URL = f'/{DOMAIN}_static/{manifest.version}'
 MODULE_URL = f'{STATIC_URL}/password-panel.js'
 
 
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """升级到 v3：清除历史配置里保存的明文主密码。
+
+    密码库内容（kdf / wrapped / verifier / items）完全不动，用户仍用原主密码
+    解锁；只是服务端不再持有任何密码材料。
+    """
+    if entry.version < 3:
+        data = dict(entry.data)
+        removed = 'master_password' in data
+        data.pop('master_password', None)
+        try:
+            hass.config_entries.async_update_entry(entry, data=data, version=3)
+        except TypeError:  # 旧版 HA 的 async_update_entry 不接受 version
+            hass.config_entries.async_update_entry(entry, data=data)
+        if removed:
+            _LOGGER.info('已从集成配置中移除明文主密码，密码库内容保持不变')
+    return True
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     domain_data = hass.data.setdefault(DOMAIN, {})
 

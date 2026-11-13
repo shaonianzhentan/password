@@ -451,6 +451,8 @@ export class VaultView {
     this.sidebarCollapsed = false;
     this.sidebarHidden = false;
     this.fingerprint = { available: false, platform: false, reason: '' };
+    this.legacyContent = null;
+    this.legacyFileName = '';
     this.idle = null;
     this.hiddenAt = null;
 
@@ -470,6 +472,11 @@ export class VaultView {
       if (event.key !== 'Enter') return;
       const field = event.target.dataset ? event.target.dataset.field : '';
       if (field === 'password') this.unlockWithPassword();
+      else if (field === 'setup-password' || field === 'setup-password2') {
+        this.setupVault().catch((err) => this.toast(err.message));
+      } else if (field === 'old-uuid' || field === 'device-old-uuid') {
+        this.runDeviceRecover().catch((err) => this.toast(err.message));
+      }
     });
     this.root.addEventListener('scroll', () => this.closeEntryActions(), true);
     this.visibilityHandler = () => {
@@ -513,11 +520,27 @@ export class VaultView {
       return;
     }
     try {
-      await this.vault.load();
-      this.screen = 'locked';
+      const state = await this.vault.load();
+      this.screen = state === 'setup' ? 'setup' : 'locked';
     } catch (err) {
-      this.screen = 'error';
-      this.message = err.message;
+      if (err.code === 'device_mismatch') {
+        this.screen = 'recover';
+        this.message = `${err.message}。请填写生成这份密码库时的旧设备 UUID。`;
+        try {
+          const info = await this.api.getDeviceInfo();
+          this.vault.device = {
+            ...this.vault.device,
+            uuid: info.deviceUuid || '',
+            id: info.deviceId || '',
+            wrapped: Boolean(info.deviceWrapped),
+          };
+        } catch {
+          // 取不到当前 UUID 不影响恢复流程
+        }
+      } else {
+        this.screen = 'error';
+        this.message = err.message;
+      }
       this.render();
       return;
     }
@@ -569,20 +592,24 @@ export class VaultView {
   }
 
   template() {
-    const locked = this.screen === 'locked';
+    const auth = ['locked', 'setup', 'recover'].includes(this.screen);
     let pane;
     if (this.screen === 'loading') {
       pane = `<div class="center-pane"><div class="card"><div class="body"><div class="empty">正在加载密码库…</div></div></div></div>`;
     } else if (this.screen === 'error') {
       pane = `<div class="center-pane"><div class="card">${this.cardHead('我的密码', '无法启动', '异常')}
         <div class="body"><p class="hint">${esc(this.message)}</p>${this.messageBox()}</div></div></div>`;
-    } else if (locked) {
+    } else if (this.screen === 'locked') {
       pane = this.lockedTemplate();
+    } else if (this.screen === 'setup') {
+      pane = this.setupTemplate();
+    } else if (this.screen === 'recover') {
+      pane = this.recoverTemplate();
     } else {
       pane = this.sidebarTemplate() + this.mainTemplate();
     }
-    return `<div class="app${this.sidebarCollapsed ? ' sidebar-collapsed' : ''}${locked ? ' auth-mode' : ''}${this.sidebarHidden ? ' sidebar-hidden' : ''}">
-      ${locked ? '' : this.topbarTemplate()}
+    return `<div class="app${this.sidebarCollapsed ? ' sidebar-collapsed' : ''}${auth ? ' auth-mode' : ''}${this.sidebarHidden ? ' sidebar-hidden' : ''}">
+      ${auth ? '' : this.topbarTemplate()}
       <div class="layout">${pane}</div>
       <div class="scrim" data-act="close-sidebar"></div>
       <input type="file" accept="application/json,.json" data-field="import-file" hidden>
@@ -591,7 +618,9 @@ export class VaultView {
     ${this.viewDialogTemplate()}
     ${this.confirmDialogTemplate()}
     ${this.credentialsDialogTemplate()}
-    ${this.passwordDialogTemplate()}`;
+    ${this.passwordDialogTemplate()}
+    ${this.legacyDialogTemplate()}
+    ${this.deviceDialogTemplate()}`;
   }
 
   lockedTemplate() {
@@ -612,6 +641,41 @@ export class VaultView {
           ${ready ? '<button data-act="fingerprint">指纹解锁</button>' : ''}
         </div>
         <p class="auth-hint">${esc(reason || '')}</p>
+        ${this.messageBox()}
+      </div>
+      <div class="auth-foot">HOME ASSISTANT · 我的密码</div>
+    </section>`;
+  }
+
+  setupTemplate() {
+    const uuid = this.vault.device.uuid || '未获取到';
+    return `<section class="auth-pane">
+      <button class="icon-btn auth-menu sidebar-menu" data-action="toggle-menu" aria-label="打开 HomeAssistant 侧边栏" title="打开 HomeAssistant 侧边栏">${ICONS.menu}</button>
+      <div class="auth-inner">
+        <div class="auth-icon">${ICONS.lock}</div>
+        <h1 class="auth-title">设置主密码</h1>
+        <p class="auth-sub">主密码只保存在浏览器内存，HomeAssistant 不会存储它</p>
+        <label class="field"><span>主密码（建议 12 位以上，忘记后无法恢复）</span><input type="password" autocomplete="new-password" data-field="setup-password" autofocus></label>
+        <label class="field"><span>确认主密码</span><input type="password" autocomplete="new-password" data-field="setup-password2"></label>
+        <div class="auth-actions"><button class="primary" data-act="setup">创建密码库</button></div>
+        <p class="auth-hint">当前设备 UUID：${esc(uuid)}<br>请单独复制保存，不要与 HA 备份放在一起；重装或只恢复密码库文件时需要它。</p>
+        ${this.messageBox()}
+      </div>
+      <div class="auth-foot">HOME ASSISTANT · 我的密码</div>
+    </section>`;
+  }
+
+  recoverTemplate() {
+    const uuid = this.vault.device.uuid || '未获取到';
+    return `<section class="auth-pane">
+      <button class="icon-btn auth-menu sidebar-menu" data-action="toggle-menu" aria-label="打开 HomeAssistant 侧边栏" title="打开 HomeAssistant 侧边栏">${ICONS.menu}</button>
+      <div class="auth-inner">
+        <div class="auth-icon">${ICONS.lock}</div>
+        <h1 class="auth-title">设备 UUID 不匹配</h1>
+        <p class="auth-sub">密码库由另一台 HomeAssistant 的 UUID 包裹</p>
+        <label class="field"><span>旧设备 UUID</span><input data-field="old-uuid" placeholder="从 HA 备份的 core.uuid 或添加集成时抄存的值获得" autofocus></label>
+        <div class="auth-actions"><button class="primary" data-act="device-recover">重新绑定并解锁</button></div>
+        <p class="auth-hint">当前设备 UUID：${esc(uuid)}<br>若显示「未获取到」，请先从 HA 备份还原 .storage/core.uuid。只需处理密文，不会接触主密码；完成后请重新抄存当前 UUID。</p>
         ${this.messageBox()}
       </div>
       <div class="auth-foot">HOME ASSISTANT · 我的密码</div>
@@ -670,8 +734,10 @@ export class VaultView {
         <div class="menu-list">
           <button class="menu-add" data-act="add">新增密码</button>
           <button data-act="import">导入备份</button>
+          <button data-act="legacy">导入历史数据</button>
           <button data-act="export">导出备份</button>
           <button data-act="credentials">指纹与凭据</button>
+          ${this.vault.device.canManage ? '<button data-act="device">设备与恢复</button>' : ''}
           <button data-act="password">修改主密码</button>
           <button data-act="lock">锁定</button>
         </div>
@@ -864,6 +930,43 @@ export class VaultView {
     </dialog>`;
   }
 
+  legacyDialogTemplate() {
+    if (this.dialog !== 'legacy') return '';
+    const fileName = this.legacyFileName ? `已选择：${this.legacyFileName}` : '尚未选择文件';
+    return `<dialog data-dialog="legacy">
+      <div class="dialog-head">导入历史数据</div>
+      <div class="dialog-body">
+        <p class="hint">选择旧版生成的 .storage/password.json，并填写旧主密码（或旧集成里保存的 32 位密钥）。转换后：标题→备注、密码正文→密码、链接→网站地址，记录会追加到当前密码库；旧文件不会被修改。</p>
+        <label class="field"><span>旧版数据文件</span><input type="file" accept="application/json,.json" data-field="legacy-file"></label>
+        <p class="hint" data-legacy-file-name>${esc(fileName)}</p>
+        <label class="field"><span>旧主密码或 32 位密钥</span><input type="password" data-field="legacy-secret" autocomplete="off"></label>
+        <label class="field"><span>旧 HA 的 UUID（可选）</span><input data-field="legacy-uuid" placeholder="留空则读取当前 HomeAssistant 的 core.uuid" autocomplete="off"></label>
+        <p class="hint">旧数据来自另一台 HomeAssistant 时，必须填写那台机器的 UUID，否则无法解密。</p>
+      </div>
+      <div class="dialog-actions">
+        <button data-act="cancel">取消</button>
+        <button class="primary" data-act="legacy-import">转换并导入</button>
+      </div>
+    </dialog>`;
+  }
+
+  deviceDialogTemplate() {
+    if (this.dialog !== 'device') return '';
+    const info = this.vault.device;
+    return `<dialog data-dialog="device">
+      <div class="dialog-head">设备与恢复</div>
+      <div class="dialog-body">
+        <p class="hint">密码库由当前 HomeAssistant 的 UUID 派生密钥整体包裹。请单独复制保存这份 UUID，不要与 HA 备份放在一起；UUID 变化后需重新绑定。</p>
+        <label class="field"><span>当前设备 UUID</span><input data-field="device-uuid" readonly value="${esc(info.uuid || '未获取到')}"></label>
+        <button data-act="copy-uuid">复制 UUID</button>
+        <p class="hint">当前密码库设备指纹：${esc(info.id || '尚未启用')} · ${info.wrapped ? '设备层已启用' : '下次写入自动启用'}</p>
+        <label class="field"><span>指定旧 UUID（重装或只恢复密码库文件时使用）</span><input data-field="device-old-uuid" placeholder="从 HA 备份或抄存记录中获得"></label>
+        <button class="primary" data-act="device-recover">用旧 UUID 重新绑定</button>
+      </div>
+      <div class="dialog-actions"><button data-act="cancel">关闭</button></div>
+    </dialog>`;
+  }
+
   // ------------------------------------------------------------------ 事件
 
   onInput(event) {
@@ -885,6 +988,23 @@ export class VaultView {
         this.toast(`已导入 ${items.length} 条记录`);
       } catch (err) {
         this.toast(`导入失败：${err.message}`);
+      }
+      return;
+    }
+    if (field === 'legacy-file') {
+      const file = event.target.files[0];
+      if (!file) return;
+      try {
+        if (file.size > 2_000_000) throw new Error('文件超过 2MB 上限');
+        this.legacyContent = await file.text();
+        this.legacyFileName = file.name;
+        // 不重建 DOM，避免清空已填写的旧主密码与 UUID
+        const label = this.root.querySelector('[data-legacy-file-name]');
+        if (label) label.textContent = `已选择：${file.name}`;
+      } catch (err) {
+        this.legacyContent = null;
+        this.legacyFileName = '';
+        this.toast(`读取文件失败：${err.message}`);
       }
     }
   }
@@ -915,6 +1035,17 @@ export class VaultView {
         case 'cancel': this.cancel(); break;
         case 'export': await this.exportBackup(); break;
         case 'import': this.root.querySelector('[data-field="import-file"]').click(); break;
+        case 'legacy':
+          this.legacyContent = null;
+          this.legacyFileName = '';
+          this.dialog = 'legacy';
+          this.render();
+          break;
+        case 'legacy-import': await this.importLegacy(); break;
+        case 'setup': await this.setupVault(); break;
+        case 'device': this.dialog = 'device'; this.render(); break;
+        case 'copy-uuid': await this.copyUuid(); break;
+        case 'device-recover': await this.runDeviceRecover(); break;
         case 'credentials': await this.openCredentials(); break;
         case 'register': await this.register(); break;
         case 'revoke': await this.revoke(target.dataset.id); break;
@@ -940,6 +1071,8 @@ export class VaultView {
     this.dialog = null;
     this.editing = null;
     this.confirm = null;
+    this.legacyContent = null;
+    this.legacyFileName = '';
     this.render();
   }
 
@@ -971,6 +1104,8 @@ export class VaultView {
     this.dialog = null;
     this.editing = null;
     this.confirm = null;
+    this.legacyContent = null;
+    this.legacyFileName = '';
     this.search = '';
     this.category = '';
     this.screen = 'locked';
@@ -1061,6 +1196,62 @@ export class VaultView {
     this.toast(options.action === 'delete-item' ? '已删除' : '凭据已撤销');
   }
 
+  async setupVault() {
+    const first = this.root.querySelector('[data-field="setup-password"]');
+    const second = this.root.querySelector('[data-field="setup-password2"]');
+    const password = first ? first.value.trim() : '';
+    if (password.length < 8) return this.toast('主密码至少需要 8 位');
+    if (password !== (second ? second.value.trim() : '')) {
+      return this.toast('两次输入的主密码不一致');
+    }
+    this.toast('正在创建密码库…');
+    await this.vault.initialize(password, []);
+    this.vault.lock();
+    this.screen = 'locked';
+    this.message = '密码库已创建，请输入刚设置的主密码解锁';
+    this.render();
+  }
+
+  async copyUuid() {
+    const uuid = this.vault.device.uuid;
+    if (!uuid) return this.toast('当前未获取到设备 UUID');
+    try {
+      await navigator.clipboard.writeText(uuid);
+      this.toast('已复制设备 UUID，请单独保存（不要与 HA 备份放在一起）');
+    } catch {
+      const input = this.root.querySelector('[data-field="device-uuid"]');
+      if (input) {
+        input.select();
+        this.toast('已选中 UUID，请按 Ctrl/Cmd + C 复制');
+      } else {
+        this.toast(`复制失败，请手动记录：${uuid}`);
+      }
+    }
+  }
+
+  async runDeviceRecover() {
+    const page = this.root.querySelector('[data-field="old-uuid"]');
+    const dialog = this.root.querySelector('[data-field="device-old-uuid"]');
+    const input = page || dialog;
+    const oldUuid = input ? input.value.trim() : '';
+    if (!oldUuid) return this.toast('请填写旧设备 UUID');
+    this.toast('正在重新绑定设备…');
+    const result = await this.api.recoverDevice(oldUuid);
+    if (page) {
+      this.dialog = null;
+      this.message = `已重新绑定（密码库 ${result.vault ? '已处理' : '无需处理'}，凭据 ${result.credentials ? '已处理' : '无需处理'}），请重新抄存当前 UUID 并解锁`;
+      this.screen = 'loading';
+      this.render();
+      await this.start();
+      return;
+    }
+    // 从已解锁的设置弹窗触发：只换了外层包裹，内层内容与密钥都没变
+    await this.vault.load();
+    this.dialog = 'device';
+    this.render();
+    this.toast('设备已重新绑定，请重新抄存当前 UUID');
+  }
+
   async exportBackup() {
     const blob = new Blob([await this.vault.exportJson()], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -1070,6 +1261,33 @@ export class VaultView {
     anchor.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     this.toast('已导出明文备份，请妥善保管并尽快删除');
+  }
+
+  async importLegacy() {
+    if (!this.legacyContent) return this.toast('请先选择旧版数据文件');
+    const dialog = this.root.querySelector('[data-dialog="legacy"]');
+    if (!dialog) return;
+    const secret = dialog.querySelector('[data-field="legacy-secret"]').value.trim();
+    if (!secret) return this.toast('请输入旧主密码或 32 位密钥');
+    const uuid = dialog.querySelector('[data-field="legacy-uuid"]').value.trim();
+
+    this.toast('正在解密并转换历史数据…');
+    const result = await this.api.convertLegacy({
+      content: this.legacyContent,
+      secret,
+      uuid,
+      unlockProof: this.vault.proof,
+    });
+    const items = normalizeItems(result.items || []);
+    if (!items.length) return this.toast('没有可导入的记录');
+    await this.vault.importItems(items);
+    await this.vault.save();
+    this.legacyContent = null;
+    this.legacyFileName = '';
+    this.dialog = null;
+    this.render();
+    const skipped = (result.failures || []).length;
+    this.toast(`已导入 ${items.length} 条历史记录${skipped ? `，${skipped} 条解密失败（请核对旧主密码与 UUID）` : ''}`);
   }
 
   async openCredentials() {

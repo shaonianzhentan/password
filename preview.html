@@ -217,9 +217,16 @@ async function callWS(message) {
   }
 
   if (command === 'vault/get') {
-    return reply(store.vault
-      ? { exists: true, vault: publicVault(store.vault) }
-      : { exists: false, vault: null, masterPassword: DEMO_PASSWORD });
+    // 预览直接准备好演示库，跳过「首次设置主密码」界面
+    await ensureVault();
+    return reply({
+      exists: true,
+      vault: publicVault(store.vault),
+      deviceUuid: 'preview-device-uuid-0000',
+      deviceId: 'preview0000000000',
+      deviceWrapped: true,
+      canManageDevice: true,
+    });
   }
 
   if (command === 'vault/put') {
@@ -236,6 +243,21 @@ async function callWS(message) {
     store.vault = { ...message.vault, revision, updated: new Date().toISOString() };
     persist();
     return reply({ revision, updated: store.vault.updated });
+  }
+
+  if (command === 'legacy/convert') {
+    return reply(null, '预览模式不提供旧版数据解密，请在 HomeAssistant 面板中使用此功能');
+  }
+
+  if (command === 'device/info') {
+    return reply({
+      deviceUuid: 'preview-device-uuid-0000',
+      deviceId: 'preview0000000000',
+      deviceWrapped: true,
+    });
+  }
+  if (command === 'device/recover') {
+    return reply(null, '预览模式不支持设备重新绑定');
   }
 
   if (command === 'webauthn/credentials/list') return reply(CREDENTIALS);

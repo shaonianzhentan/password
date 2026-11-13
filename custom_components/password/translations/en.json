@@ -3,15 +3,12 @@
   "config": {
     "step": {
       "user": {
-        "description": "Set the master password and choose whether the panel is visible to administrators only. The password is stored in the Home Assistant config entry and is used to create the vault on first launch.",
+        "title": "Add My Passwords",
+        "description": "The master password is set in your browser when you first open the panel; Home Assistant never stores it and it cannot be recovered if lost. Current device UUID: {uuid} Copy and keep this UUID separately from your HA backups. You will need it to rebind the vault after reinstalling Home Assistant or restoring only the vault file.",
         "data": {
-          "master_password": "Master password (at least 8 characters)",
           "require_admin": "Administrators only"
         }
       }
-    },
-    "error": {
-      "weak_password": "Master password must be at least 8 characters"
     },
     "abort": {
       "single_instance_allowed": "Only a single configuration is allowed"

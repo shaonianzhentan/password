@@ -22,6 +22,10 @@
  * 改一条只重加密一条，其余条目连同 IV 原样写回。
  * WebAuthn 包裹沿用「服务端 credSecret + 浏览器 localStorage 本地包裹」，
  * 不写入 vault 文件。
+ *
+ * 服务端零知识：主密码只在浏览器内存，config entry 不保存任何密码材料；
+ * 磁盘上的 password_vault.json 是设备层 envelope（core.uuid 派生密钥的
+ * AES-256-GCM），由服务端读写时自动解开/包裹，前端仍只见 format 2。
  */
 
 import {
@@ -56,18 +60,36 @@ export function aadOf(meta) {
   return encoder.encode(JSON.stringify(META_FIELDS.map((key) => meta[key])));
 }
 
+/** 兼容旧版转换脚本产出的 title / text / link / date 字段。 */
+function legacyDate(value) {
+  const raw = text(value).trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return now();
+  const moment = new Date(`${raw}T00:00:00.000Z`);
+  return Number.isNaN(moment.getTime()) ? now() : moment.toISOString();
+}
+
 export function normalizeItems(data) {
   const list = Array.isArray(data) ? data : (data && Array.isArray(data.items) ? data.items : null);
   if (!list) throw new Error('导入文件格式不正确');
   return list
     .filter((item) => item && typeof item === 'object')
-    .map((item) => ({
-      ...metaOf(item),
-      username: text(item.username),
-      password: text(item.password),
-      totp: text(item.totp),
-      updatedAt: text(item.updatedAt) || now(),
-    }));
+    .map((item) => {
+      const old = item.title !== undefined || item.text !== undefined || item.link !== undefined;
+      const meta = metaOf({
+        ...item,
+        category: item.category,
+        origins: old ? [item.link] : item.origins,
+        notes: old ? (item.notes ?? item.title) : item.notes,
+      });
+      return {
+        ...meta,
+        username: old ? '' : text(item.username),
+        // 旧版 text 是密码正文，必须放进加密字段，不能落到明文元数据 notes
+        password: old ? text(item.text) : text(item.password),
+        totp: old ? '' : text(item.totp),
+        updatedAt: old ? legacyDate(item.date) : (text(item.updatedAt) || now()),
+      };
+    });
 }
 
 export class Vault {
@@ -79,24 +101,24 @@ export class Vault {
     this.proof = null;
     this.items = [];
     this.revision = 0;
+    this.device = { uuid: '', id: '', wrapped: false, canManage: false };
   }
 
   get unlocked() {
     return !!this.key;
   }
 
+  /** 返回 'setup'（需设置主密码）或 'ready'（可解锁）。 */
   async load() {
     const data = await this.api.getVault();
-    if (!data.exists) {
-      // 主密码在添加集成时已填写，首次打开直接建库，无需初始化界面
-      const password = data.masterPassword;
-      if (!password) {
-        throw new Error('未获取到集成中填写的主密码，请在集成配置中重新添加');
-      }
-      await this.initialize(password, []);
-      this.lock();
-      return false;
-    }
+    this.device = {
+      uuid: data.deviceUuid || '',
+      id: data.deviceId || '',
+      wrapped: Boolean(data.deviceWrapped),
+      canManage: Boolean(data.canManageDevice),
+    };
+    // 服务端不再下发任何密码材料，首次建库由界面在浏览器内收集主密码
+    if (!data.exists) return 'setup';
     const vault = data.vault;
     if (!vault || vault.format !== VAULT_FORMAT) {
       throw new Error('密码库是旧格式，本版本不提供迁移。请删除 HA 配置目录下的 .storage/password_vault.json 后重新打开面板建库');
@@ -104,7 +126,7 @@ export class Vault {
     this.exists = true;
     this.raw = vault;
     this.revision = vault.revision || 0;
-    return true;
+    return 'ready';
   }
 
   async seal(item, key) {
@@ -120,6 +142,7 @@ export class Vault {
   }
 
   async initialize(password, importedItems = []) {
+    // password 只作局部变量派生 KEK，不写入 state / storage / sessionStorage
     const salt = randomBytes(16);
     const key = randomBytes(32);
     const kek = await deriveKek(password, salt, ITERATIONS);
