@@ -1,11 +1,12 @@
-/* 纯 WebCrypto 实现：PBKDF2 + AES-256-GCM + HMAC，零第三方依赖。 */
+/* 纯 WebCrypto 实现：PBKDF2 + AES-256-GCM + HMAC，零第三方依赖。
+ * 每条记录独立随机 IV，密文可选绑定该条明文元数据（AAD）。 */
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-export const VAULT_VERSION = 2;
+export const VAULT_FORMAT = 2;
 export const ITERATIONS = 600000;
-const UNLOCK_CONTEXT = 'password/unlock/v2';
+const UNLOCK_CONTEXT = 'password/unlock/v1';
 const IV_LENGTH = 12;
 
 export function cryptoAvailable() {
@@ -47,31 +48,29 @@ async function aesKey(keyBytes, usage) {
   return crypto.subtle.importKey('raw', keyBytes, 'AES-GCM', false, [usage]);
 }
 
-export async function encryptBytes(keyBytes, dataBytes) {
+export async function encryptBytes(keyBytes, dataBytes, aad) {
   const iv = randomBytes(IV_LENGTH);
   const key = await aesKey(keyBytes, 'encrypt');
-  const encrypted = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv, tagLength: 128 }, key, dataBytes
-  );
+  const params = { name: 'AES-GCM', iv, tagLength: 128 };
+  if (aad) params.additionalData = aad;
+  const encrypted = await crypto.subtle.encrypt(params, key, dataBytes);
   return { iv: b64(iv), ct: b64(new Uint8Array(encrypted)) };
 }
 
-export async function decryptBytes(keyBytes, payload) {
+export async function decryptBytes(keyBytes, payload, aad) {
   const key = await aesKey(keyBytes, 'decrypt');
-  const decrypted = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: ub64(payload.iv), tagLength: 128 },
-    key,
-    ub64(payload.ct)
-  );
+  const params = { name: 'AES-GCM', iv: ub64(payload.iv), tagLength: 128 };
+  if (aad) params.additionalData = aad;
+  const decrypted = await crypto.subtle.decrypt(params, key, ub64(payload.ct));
   return new Uint8Array(decrypted);
 }
 
-export async function encryptJson(keyBytes, value) {
-  return encryptBytes(keyBytes, encoder.encode(JSON.stringify(value)));
+export async function encryptJson(keyBytes, value, aad) {
+  return encryptBytes(keyBytes, encoder.encode(JSON.stringify(value)), aad);
 }
 
-export async function decryptJson(keyBytes, payload) {
-  return JSON.parse(decoder.decode(await decryptBytes(keyBytes, payload)));
+export async function decryptJson(keyBytes, payload, aad) {
+  return JSON.parse(decoder.decode(await decryptBytes(keyBytes, payload, aad)));
 }
 
 export async function deriveKek(password, salt, iterations = ITERATIONS) {

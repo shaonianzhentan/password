@@ -1,16 +1,18 @@
 {
   "domain": "password",
   "name": "我的密码",
-  "version": "2026.11.0",
-  "config_flow": true,
-  "documentation": "https://github.com/shaonianzhentan/password",
-  "requirements": [
-    "cbor2>=5.4.6"
-  ],
-  "dependencies": [
-    "panel_custom"
-  ],
   "codeowners": [
     "@shaonianzhentan"
-  ]
+  ],
+  "config_flow": true,
+  "dependencies": [
+    "http"
+  ],
+  "documentation": "https://github.com/shaonianzhentan/password",
+  "integration_type": "service",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/shaonianzhentan/password/issues",
+  "requirements": [],
+  "single_config_entry": true,
+  "version": "2026.11.13.13"
 }

@@ -1,22 +1,21 @@
 """WebAuthn 服务端校验。
 
-依赖 cbor2 解析 attestationObject / COSE 公钥，签名验证使用 HomeAssistant
-自带的 cryptography。challenge 只保存在内存中，一次性消费且有过期时间。
+使用标准库自带的精简 CBOR 编解码解析 attestationObject / COSE 公钥，
+签名验证使用 HomeAssistant 自带的 cryptography，无第三方 pip 依赖。
+challenge 只保存在内存中，一次性消费且有过期时间。
 """
 from __future__ import annotations
 
 import base64
 import hashlib
 import hmac
-import io
 import json
 import secrets
 import struct
 import threading
 import time
-from typing import Any
+from typing import Any, NamedTuple
 
-import cbor2
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec, ed25519, padding, rsa
@@ -29,6 +28,232 @@ FLAG_AT = 0x40
 
 class WebAuthnError(Exception):
     """WebAuthn 校验失败。"""
+
+
+class CBORError(WebAuthnError):
+    """CBOR 数据不合法。"""
+
+
+class CBORTag(NamedTuple):
+    """CBOR 语义标签（major type 6）。"""
+
+    tag: int
+    value: Any
+
+
+class CBORSimple(NamedTuple):
+    """CBOR 简单值（major type 7，布尔/空值/浮点除外）。"""
+
+    value: int
+
+
+CBOR_UNDEFINED = object()
+_MAX_CBOR_BYTES = 1 << 20
+_MAX_CBOR_DEPTH = 16
+
+
+def _cbor_arg(ai: int, data: bytes, pos: int) -> tuple[int | None, int]:
+    """读取 initial byte 之后的附加参数，None 表示不定长编码。"""
+    if ai < 24:
+        return ai, pos
+    sizes = {24: 1, 25: 2, 26: 4, 27: 8}
+    if ai in sizes:
+        size = sizes[ai]
+        if pos + size > len(data):
+            raise CBORError('CBOR 数据截断')
+        return int.from_bytes(data[pos:pos + size], 'big'), pos + size
+    if ai == 31:
+        return None, pos
+    raise CBORError('非法的 CBOR 附加信息')
+
+
+def _cbor_head(mt: int, arg: int) -> bytes:
+    """编码 initial byte 及附加参数，始终使用最短的定长形式。"""
+    if arg < 0 or arg >= 1 << 64:
+        raise CBORError('CBOR 数值超范围')
+    if arg < 24:
+        return bytes(((mt << 5) | arg,))
+    for ai, size in ((24, 1), (25, 2), (26, 4), (27, 8)):
+        if arg < 1 << (8 * size):
+            return bytes(((mt << 5) | ai,)) + arg.to_bytes(size, 'big')
+    raise CBORError('CBOR 数值超范围')
+
+
+def _cbor_string(
+    mt: int, arg: int | None, data: bytes, pos: int
+) -> tuple[bytes | str, int]:
+    if arg is not None:
+        if arg > len(data) - pos:
+            raise CBORError('CBOR 字符串长度越界')
+        raw = data[pos:pos + arg]
+        pos += arg
+    else:
+        chunks = []
+        while True:
+            if pos >= len(data):
+                raise CBORError('不定长 CBOR 字符串未结束')
+            if data[pos] == 0xFF:
+                pos += 1
+                break
+            if data[pos] >> 5 != mt:
+                raise CBORError('不定长 CBOR 字符串分块类型不符')
+            chunk_arg, pos = _cbor_arg(data[pos] & 0x1F, data, pos + 1)
+            if chunk_arg is None or chunk_arg > len(data) - pos:
+                raise CBORError('CBOR 字符串长度越界')
+            chunks.append(data[pos:pos + chunk_arg])
+            pos += chunk_arg
+        raw = b''.join(chunks)
+    if mt == 2:
+        return raw, pos
+    try:
+        return raw.decode('utf-8'), pos
+    except UnicodeDecodeError as err:
+        raise CBORError('CBOR 文本不是合法 UTF-8') from err
+
+
+def _cbor_item(data: bytes, pos: int, depth: int) -> tuple[Any, int]:
+    """解码一个 CBOR 项，返回 (值, 结束偏移)；允许其后还有附加数据。"""
+    if depth > _MAX_CBOR_DEPTH:
+        raise CBORError('CBOR 嵌套过深')
+    if pos >= len(data):
+        raise CBORError('CBOR 数据截断')
+    initial = data[pos]
+    pos += 1
+    mt, ai = initial >> 5, initial & 0x1F
+
+    if mt == 7:
+        if ai < 20:
+            return CBORSimple(ai), pos
+        if ai == 20:
+            return False, pos
+        if ai == 21:
+            return True, pos
+        if ai == 22:
+            return None, pos
+        if ai == 23:
+            return CBOR_UNDEFINED, pos
+        if ai == 24:
+            if pos >= len(data):
+                raise CBORError('CBOR 数据截断')
+            value = data[pos]
+            pos += 1
+            if value < 32:
+                raise CBORError('非法的 CBOR 简单值')
+            return CBORSimple(value), pos
+        if ai in (25, 26, 27):
+            fmt = {25: '>e', 26: '>f', 27: '>d'}[ai]
+            size = struct.calcsize(fmt)
+            if pos + size > len(data):
+                raise CBORError('CBOR 数据截断')
+            return struct.unpack(fmt, data[pos:pos + size])[0], pos + size
+        raise CBORError('非法的 CBOR 结束标记')
+
+    arg, pos = _cbor_arg(ai, data, pos)
+    if mt == 6:
+        if arg is None:
+            raise CBORError('不定长 CBOR 标签')
+        value, pos = _cbor_item(data, pos, depth + 1)
+        return CBORTag(arg, value), pos
+    if mt == 0 or mt == 1:
+        if arg is None:
+            raise CBORError('不定长 CBOR 整数')
+        return (arg if mt == 0 else -1 - arg), pos
+    if mt == 2 or mt == 3:
+        return _cbor_string(mt, arg, data, pos)
+    if mt == 4 or mt == 5:
+        remaining = arg
+        if remaining is not None:
+            minimum = 1 if mt == 4 else 2
+            if remaining > (len(data) - pos) // minimum:
+                raise CBORError('CBOR 容器长度越界')
+        items: list[Any] = []
+        while True:
+            if remaining is None:
+                if pos >= len(data):
+                    raise CBORError('不定长 CBOR 容器未结束')
+                if data[pos] == 0xFF:
+                    pos += 1
+                    break
+            elif remaining == 0:
+                break
+            else:
+                remaining -= 1
+            item, pos = _cbor_item(data, pos, depth + 1)
+            if mt == 5:
+                value, pos = _cbor_item(data, pos, depth + 1)
+                items.append((item, value))
+            else:
+                items.append(item)
+        if mt == 4:
+            return items, pos
+        result: dict[Any, Any] = {}
+        for key, value in items:
+            try:
+                result[key] = value
+            except TypeError as err:
+                raise CBORError('CBOR map 键类型不支持') from err
+        return result, pos
+    raise CBORError('未知的 CBOR 类型')
+
+
+def cbor_decode_one(data: bytes, pos: int = 0) -> tuple[Any, int]:
+    """解码一段字节中的第一个 CBOR 项，用于解析 authData 内嵌的 COSE 公钥。"""
+    if not isinstance(data, (bytes, bytearray, memoryview)):
+        raise CBORError('CBOR 数据类型错误')
+    data = bytes(data)
+    if len(data) > _MAX_CBOR_BYTES:
+        raise CBORError('CBOR 数据过大')
+    return _cbor_item(data, pos, 0)
+
+
+def cbor_loads(data: bytes) -> Any:
+    """解码完整的一段 CBOR 数据。"""
+    value, pos = cbor_decode_one(data)
+    if pos != len(data):
+        raise CBORError('CBOR 数据存在多余字节')
+    return value
+
+
+def cbor_dumps(value: Any, depth: int = 0) -> bytes:
+    """编码 Python 值为 CBOR；只需覆盖 WebAuthn/COSE 使用到的类型。"""
+    if depth > _MAX_CBOR_DEPTH:
+        raise CBORError('CBOR 嵌套过深')
+    if value is None:
+        return b'\xf6'
+    if value is CBOR_UNDEFINED:
+        return b'\xf7'
+    if value is False:
+        return b'\xf4'
+    if value is True:
+        return b'\xf5'
+    if isinstance(value, int):
+        return _cbor_head(0, value) if value >= 0 else _cbor_head(1, -1 - value)
+    if isinstance(value, float):
+        return b'\xfb' + struct.pack('>d', value)
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        raw = bytes(value)
+        return _cbor_head(2, len(raw)) + raw
+    if isinstance(value, str):
+        raw = value.encode('utf-8')
+        return _cbor_head(3, len(raw)) + raw
+    if isinstance(value, CBORTag):
+        return _cbor_head(6, value.tag) + cbor_dumps(value.value, depth + 1)
+    if isinstance(value, CBORSimple):
+        if 0 <= value.value < 24:
+            return bytes((0xe0 | value.value,))
+        if 32 <= value.value <= 255:
+            return b'\xf8' + bytes((value.value,))
+        raise CBORError('非法的 CBOR 简单值')
+    if isinstance(value, (list, tuple)):
+        return _cbor_head(4, len(value)) + b''.join(
+            cbor_dumps(item, depth + 1) for item in value
+        )
+    if isinstance(value, dict):
+        return _cbor_head(5, len(value)) + b''.join(
+            cbor_dumps(key, depth + 1) + cbor_dumps(item, depth + 1)
+            for key, item in value.items()
+        )
+    raise CBORError(f'不支持的 CBOR 类型：{type(value).__name__}')
 
 
 def b64u(data: bytes) -> str:
@@ -129,10 +354,10 @@ def parse_registration(
 ) -> dict[str, Any]:
     """从 attestationObject 提取凭据 ID、COSE 公钥与签名计数。"""
     try:
-        obj = cbor2.loads(b64u_decode(attestation_object))
+        obj = cbor_loads(b64u_decode(attestation_object))
         auth_data = obj['authData']
     except Exception as err:
-        raise WebAuthnError('attestationObject 解析失败') from err
+        raise WebAuthnError(f'attestationObject 解析失败：{err}') from err
 
     if not isinstance(auth_data, bytes):
         raise WebAuthnError('authData 无效')
@@ -150,22 +375,24 @@ def parse_registration(
         raise WebAuthnError('凭据 ID 不匹配')
 
     try:
-        cose = cbor2.CBORDecoder(io.BytesIO(auth_data[offset:])).decode()
+        cose, _ = cbor_decode_one(auth_data[offset:])
     except Exception as err:
-        raise WebAuthnError('COSE 公钥解析失败') from err
+        raise WebAuthnError(f'COSE 公钥解析失败：{err}') from err
     if not isinstance(cose, dict) or not cose.get(3):
         raise WebAuthnError('COSE 公钥无效')
 
     return {
         'credential_id': credential_id,
-        'public_key': b64u(cbor2.dumps(cose)),
+        'public_key': b64u(cbor_dumps(cose)),
         'alg': cose[3],
         'sign_count': sign_count,
     }
 
 
 def load_public_key(encoded: str):
-    cose = cbor2.loads(b64u_decode(encoded))
+    cose = cbor_loads(b64u_decode(encoded))
+    if not isinstance(cose, dict):
+        raise WebAuthnError('公钥格式无效')
     kty = cose.get(1)
     if kty == 2:
         crv = cose.get(-1)

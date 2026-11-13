@@ -1,11 +1,60 @@
-/* 密码库状态机：初始化、两种解锁路径、条目 CRUD、保存与备份。 */
+/* 密码库状态机：明文元数据 + 逐条 AES-GCM 密文、按需解密、乐观锁保存。
+ *
+ * === 数据契约（format 2）===
+ * .storage/password_vault.json 顶层：
+ *   { format: 2, kdf, verifier, wrapped, items[], revision, updated }
+ *   kdf      = { alg: 'PBKDF2-SHA256', salt: b64, iterations: 600000, hash: 'SHA-256' }
+ *   verifier = HMAC(vaultKey, 'password/unlock/v1')，写命令携带它做解锁证明
+ *   wrapped.password = { iv, ct }，主密码派生的 KEK 包裹随机 32 字节 vaultKey
+ *   revision / updated 由服务端写入，revision 用于乐观锁
+ *
+ * items[] 每项：
+ *   明文：id / type / category / origins[] / notes / updatedAt
+ *   密文：enc = { alg: 'AES-256-GCM', iv, ct }，ct 解密后为
+ *         { username, password, totp }
+ *   notes 第一行作为列表显示名；type 目前固定 'login'
+ *
+ * AAD = JSON.stringify([id, type, category, origins, notes]) 的 UTF-8 字节，
+ * 不含 updatedAt / revision。明文元数据一旦被改动，该条解密立即失败；
+ * 编辑任一元数据字段都要用新 IV 重新加密这一条。
+ *
+ * 同步：全量 password/vault/get + 带 revision 的 password/vault/put；
+ * 改一条只重加密一条，其余条目连同 IV 原样写回。
+ * WebAuthn 包裹沿用「服务端 credSecret + 浏览器 localStorage 本地包裹」，
+ * 不写入 vault 文件。
+ */
 
 import {
-  VAULT_VERSION, ITERATIONS, b64, ub64, randomBytes,
+  VAULT_FORMAT, ITERATIONS, b64, ub64, randomBytes,
   deriveKek, encryptBytes, decryptBytes, encryptJson, decryptJson, unlockProof,
 } from './crypto.js';
 
-const today = () => new Date().toISOString().slice(0, 10);
+const encoder = new TextEncoder();
+const now = () => new Date().toISOString();
+const text = (value) => String(value == null ? '' : value);
+
+const META_FIELDS = ['id', 'type', 'category', 'origins', 'notes'];
+const SECRET_FIELDS = ['username', 'password', 'totp'];
+
+function originsOf(value) {
+  const list = Array.isArray(value) ? value : text(value).split(/[\n,]+/);
+  return list.map((item) => text(item).trim()).filter(Boolean);
+}
+
+export function metaOf(item) {
+  return {
+    id: text(item.id) || crypto.randomUUID(),
+    type: text(item.type) || 'login',
+    category: text(item.category).trim(),
+    origins: originsOf(item.origins),
+    notes: text(item.notes),
+  };
+}
+
+/** AAD 用 JSON 数组编码，避免分隔符歧义；顺序与字段集合必须长期固定。 */
+export function aadOf(meta) {
+  return encoder.encode(JSON.stringify(META_FIELDS.map((key) => meta[key])));
+}
 
 export function normalizeItems(data) {
   const list = Array.isArray(data) ? data : (data && Array.isArray(data.items) ? data.items : null);
@@ -13,12 +62,11 @@ export function normalizeItems(data) {
   return list
     .filter((item) => item && typeof item === 'object')
     .map((item) => ({
-      id: String(item.id || crypto.randomUUID()),
-      title: String(item.title || ''),
-      category: String(item.category || ''),
-      text: String(item.text || ''),
-      link: String(item.link || ''),
-      date: String(item.date || today()),
+      ...metaOf(item),
+      username: text(item.username),
+      password: text(item.password),
+      totp: text(item.totp),
+      updatedAt: text(item.updatedAt) || now(),
     }));
 }
 
@@ -49,10 +97,26 @@ export class Vault {
       this.lock();
       return false;
     }
+    const vault = data.vault;
+    if (!vault || vault.format !== VAULT_FORMAT) {
+      throw new Error('密码库是旧格式，本版本不提供迁移。请删除 HA 配置目录下的 .storage/password_vault.json 后重新打开面板建库');
+    }
     this.exists = true;
-    this.raw = data.vault || null;
-    this.revision = this.raw ? this.raw.revision : 0;
+    this.raw = vault;
+    this.revision = vault.revision || 0;
     return true;
+  }
+
+  async seal(item, key) {
+    const meta = metaOf(item);
+    const secret = {};
+    for (const field of SECRET_FIELDS) secret[field] = text(item[field]);
+    const enc = await encryptJson(key, secret, aadOf(meta));
+    return {
+      ...meta,
+      updatedAt: item.updatedAt || now(),
+      enc: { alg: 'AES-256-GCM', ...enc },
+    };
   }
 
   async initialize(password, importedItems = []) {
@@ -60,17 +124,21 @@ export class Vault {
     const key = randomBytes(32);
     const kek = await deriveKek(password, salt, ITERATIONS);
     const proof = await unlockProof(key);
+    const items = [];
+    for (const item of normalizeItems(importedItems)) {
+      items.push(await this.seal(item, key));
+    }
     const vault = {
-      version: VAULT_VERSION,
-      kdf: { salt: b64(salt), iterations: ITERATIONS, hash: 'SHA-256' },
-      wrapped: { password: await encryptBytes(kek, key) },
-      blob: await encryptJson(key, { version: VAULT_VERSION, items: importedItems }),
+      format: VAULT_FORMAT,
+      kdf: { alg: 'PBKDF2-SHA256', salt: b64(salt), iterations: ITERATIONS, hash: 'SHA-256' },
       verifier: proof,
+      wrapped: { password: await encryptBytes(kek, key) },
+      items,
     };
     const result = await this.api.putVault({ create: true, vault });
     this.key = key;
     this.proof = proof;
-    this.items = importedItems;
+    this.items = items;
     this.revision = result.revision;
     this.raw = vault;
     this.exists = true;
@@ -100,15 +168,18 @@ export class Vault {
   }
 
   async adoptKey(key) {
-    let data;
-    try {
-      data = await decryptJson(key, this.raw.blob);
-    } catch (err) {
-      throw new Error('数据解密失败，密钥不正确');
+    const items = Array.isArray(this.raw.items) ? this.raw.items : [];
+    // 用第一条自检密钥是否正确；列表本身不需要解密任何条目。
+    if (items.length) {
+      try {
+        await decryptJson(key, items[0].enc, aadOf(metaOf(items[0])));
+      } catch (err) {
+        throw new Error('数据解密失败，密钥不正确或明文元数据已被改动');
+      }
     }
     this.key = key;
     this.proof = await unlockProof(key);
-    this.items = Array.isArray(data.items) ? data.items : [];
+    this.items = items;
   }
 
   lock() {
@@ -117,18 +188,58 @@ export class Vault {
     this.items = [];
   }
 
+  /** 只解密指定条目；列表渲染不触发任何解密。 */
+  async reveal(id) {
+    if (!this.unlocked) throw new Error('请先解锁');
+    const entry = this.items.find((item) => item.id === id);
+    if (!entry) return null;
+    const meta = metaOf(entry);
+    let secret;
+    try {
+      secret = await decryptJson(this.key, entry.enc, aadOf(meta));
+    } catch (err) {
+      throw new Error('该条记录解密失败，明文元数据可能已被改动');
+    }
+    return {
+      ...meta,
+      username: text(secret.username),
+      password: text(secret.password),
+      totp: text(secret.totp),
+      updatedAt: entry.updatedAt,
+    };
+  }
+
+  /** 只重加密被修改的这一条，其余条目连同 IV 原样保留。 */
+  async upsert(item) {
+    if (!this.unlocked) throw new Error('请先解锁');
+    const sealed = await this.seal({ ...item, updatedAt: now() }, this.key);
+    const index = item.id ? this.items.findIndex((entry) => entry.id === item.id) : -1;
+    if (index >= 0) this.items[index] = sealed;
+    else this.items.unshift(sealed);
+  }
+
+  async importItems(plainItems) {
+    const existing = new Set(this.items.map((item) => item.id));
+    for (const item of plainItems) {
+      const next = { ...item };
+      if (!next.id || existing.has(next.id)) next.id = crypto.randomUUID();
+      existing.add(next.id);
+      await this.upsert(next);
+    }
+  }
+
+  remove(id) {
+    this.items = this.items.filter((item) => item.id !== id);
+  }
+
   async save() {
     if (!this.unlocked) throw new Error('请先解锁');
-    const blob = await encryptJson(this.key, {
-      version: VAULT_VERSION,
-      items: this.items,
-    });
     const vault = {
-      version: VAULT_VERSION,
+      format: VAULT_FORMAT,
       kdf: this.raw.kdf,
       wrapped: this.raw.wrapped,
-      blob,
       verifier: this.proof,
+      items: this.items,
     };
     const result = await this.api.putVault({
       vault,
@@ -145,7 +256,7 @@ export class Vault {
     const kek = await deriveKek(password, salt, ITERATIONS);
     this.raw = {
       ...this.raw,
-      kdf: { salt: b64(salt), iterations: ITERATIONS, hash: 'SHA-256' },
+      kdf: { alg: 'PBKDF2-SHA256', salt: b64(salt), iterations: ITERATIONS, hash: 'SHA-256' },
       wrapped: {
         ...this.raw.wrapped,
         password: await encryptBytes(kek, this.key),
@@ -154,34 +265,18 @@ export class Vault {
     await this.save();
   }
 
-  upsert(item) {
-    if (item.id) {
-      const index = this.items.findIndex((entry) => entry.id === item.id);
-      if (index >= 0) {
-        this.items[index] = { ...this.items[index], ...item, date: today() };
-        return;
-      }
-    }
-    this.items.unshift({
-      id: crypto.randomUUID(),
-      title: '',
-      category: '',
-      text: '',
-      link: '',
-      date: today(),
-      ...item,
-    });
-  }
-
-  remove(id) {
-    this.items = this.items.filter((item) => item.id !== id);
-  }
-
   get categories() {
     return Array.from(new Set(this.items.map((item) => item.category).filter(Boolean)));
   }
 
-  exportJson() {
-    return JSON.stringify(this.items, null, 2);
+  async exportJson() {
+    if (!this.unlocked) throw new Error('请先解锁');
+    const plain = [];
+    for (const entry of this.items) {
+      const meta = metaOf(entry);
+      const secret = await decryptJson(this.key, entry.enc, aadOf(meta));
+      plain.push({ ...meta, ...secret, updatedAt: entry.updatedAt });
+    }
+    return JSON.stringify(plain, null, 2);
   }
 }

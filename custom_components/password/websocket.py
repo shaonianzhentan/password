@@ -2,8 +2,8 @@
 
 不注册任何自定义 HTTP 端点：所有请求都走 HA 已鉴权的 websocket 连接，
 按 connection.user 做管理员校验，命令与响应不出现在 URL 或访问日志中。
-vault 是前端加密后的整库密文；写操作需要 unlockProof（由 vaultKey 派生的
-HMAC）与 revision 乐观锁，防止未解锁者覆盖数据。
+vault 的条目元数据是明文，敏感字段由前端逐条加密；服务端只做结构校验，
+写操作需要 unlockProof（由 vaultKey 派生的 HMAC）与 revision 乐观锁。
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ from .storage import VaultStorage
 _LOGGER = logging.getLogger(__name__)
 DOMAIN = manifest.domain
 PREFIX = f'{DOMAIN}/'
-VAULT_FIELDS = ('version', 'kdf', 'wrapped', 'blob', 'verifier')
+VAULT_FIELDS = ('format', 'kdf', 'wrapped', 'items', 'verifier')
 
 COMMANDS = (
     f'{PREFIX}vault/get',
@@ -37,6 +37,42 @@ COMMANDS = (
     f'{PREFIX}webauthn/credentials/list',
     f'{PREFIX}webauthn/credentials/delete',
 )
+
+# websocket_command 只声明 type 时，HA 会把处理器标记为无 schema 并拒绝
+# 任何带附加字段的消息（"extra keys not allowed"）。因此必须按命令逐个
+# 声明前端可能携带的字段；无附加字段的命令保持空字典。
+# 注意 id 是 HA 的消息编号，业务里的凭据 ID 不能叫 id。
+_ORIGIN_KEY = {vol.Optional('accessOrigin'): str}
+
+COMMAND_SCHEMAS: dict[str, dict] = {
+    'vault/get': {},
+    'vault/put': {
+        vol.Required('vault'): dict,
+        vol.Optional('create'): bool,
+        vol.Optional('unlockProof'): str,
+        vol.Optional('revision'): int,
+    },
+    'webauthn/register/options': {**_ORIGIN_KEY},
+    'webauthn/register/verify': {
+        vol.Required('challenge'): str,
+        vol.Required('credential'): dict,
+        vol.Required('credSecret'): str,
+        vol.Required('unlockProof'): str,
+        vol.Optional('name'): str,
+        **_ORIGIN_KEY,
+    },
+    'webauthn/authenticate/options': {**_ORIGIN_KEY},
+    'webauthn/authenticate/verify': {
+        vol.Required('challenge'): str,
+        vol.Required('credential'): dict,
+        **_ORIGIN_KEY,
+    },
+    'webauthn/credentials/list': {},
+    'webauthn/credentials/delete': {
+        vol.Required('credentialId'): str,
+        vol.Required('unlockProof'): str,
+    },
+}
 
 
 class WsError(Exception):
@@ -64,27 +100,62 @@ def _check_admin(hass, connection) -> bool:
     return not require_admin or bool(user and user.is_admin)
 
 
-def _access_host(hass, connection) -> str:
-    """浏览器看到的 host（含端口），用于 WebAuthn 的 RP ID 与 origin 校验。"""
-    request = getattr(connection, 'request', None)
-    host = getattr(request, 'host', None)
-    if host:
-        return host
+def _access_host(hass, msg) -> str:
+    """浏览器看到的 host（含端口），用于 WebAuthn 的 RP ID 与 origin 校验。
+
+    HA 的 ActiveConnection 不暴露握手请求对象，所以由前端传 location.origin。
+    这个值只是「期望值」，不是信任锚：parse_client_data 要求认证器签名的
+    clientDataJSON.origin 与它一致，parse_auth_data 校验 rpIdHash，一次性
+    challenge 也绑定同一个 host（options 与 verify 不能换域名）。
+    """
+    reported = msg.get('accessOrigin')
+    if isinstance(reported, str) and reported.startswith(('http://', 'https://')):
+        host = urlparse(reported).netloc
+        if host and host.isascii() and all(
+            char.isalnum() or char in '.-:[]' for char in host
+        ):
+            return host
     for url in (hass.config.external_url, hass.config.internal_url):
         if url:
             return urlparse(url).netloc
     raise WsError(
-        'unknown_error', '无法确定访问域名，请配置 HomeAssistant 内部/外部 URL'
+        'unknown_error',
+        '无法确定访问域名：请更新前端页面，或配置 HomeAssistant 内部/外部 URL',
+    )
+
+
+def _valid_item(item: Any) -> bool:
+    """只校验明文元数据与密文容器的形状，不解析密文内容。"""
+    if not isinstance(item, dict):
+        return False
+    for key in ('id', 'type', 'category', 'notes', 'updatedAt'):
+        if not isinstance(item.get(key), str):
+            return False
+    if not item['id']:
+        return False
+    origins = item.get('origins')
+    if not isinstance(origins, list) or not all(
+        isinstance(origin, str) for origin in origins
+    ):
+        return False
+    enc = item.get('enc')
+    return (
+        isinstance(enc, dict)
+        and isinstance(enc.get('alg'), str)
+        and isinstance(enc.get('iv'), str)
+        and isinstance(enc.get('ct'), str)
     )
 
 
 def _valid_vault(vault: Any) -> bool:
     return (
         isinstance(vault, dict)
-        and vault.get('version') == 2
+        and vault.get('format') == 2
         and isinstance(vault.get('kdf'), dict)
         and isinstance(vault.get('wrapped'), dict)
-        and isinstance(vault.get('blob'), dict)
+        and isinstance(vault.get('items'), list)
+        and len(vault['items']) <= 10000
+        and all(_valid_item(item) for item in vault['items'])
         and isinstance(vault.get('verifier'), str)
         and len(vault['verifier']) >= 20
     )
@@ -262,7 +333,7 @@ async def _credentials_delete(hass, connection, msg, host):
     vault = await _load_vault(hass)
     if not _proof_ok(vault, msg.get('unlockProof')):
         raise WsError('not_allowed', '请先解锁')
-    credential_id = msg.get('id')
+    credential_id = msg.get('credentialId')
     store = await _load_credentials(hass)
     before = len(store['credentials'])
     store['credentials'] = [
@@ -302,7 +373,7 @@ async def _execute(hass: HomeAssistant, connection, msg, command: str) -> None:
         handler = HANDLERS.get(command)
         if handler is None:
             raise WsError('unknown_command', '未知命令')
-        host = _access_host(hass, connection) if command in HOST_COMMANDS else ''
+        host = _access_host(hass, msg) if command in HOST_COMMANDS else ''
         result = await handler(hass, connection, msg, host)
     except WsError as err:
         connection.send_error(msg['id'], err.code, err.message)
@@ -316,9 +387,12 @@ async def _execute(hass: HomeAssistant, connection, msg, command: str) -> None:
 
 def _ws(command: str):
     """按 HA 官方约定生成带装饰器的命令处理函数。"""
-    @websocket_api.websocket_command({
+    schema = {
         vol.Required('type'): f'{PREFIX}{command}',
-    })
+        **COMMAND_SCHEMAS[command],
+    }
+
+    @websocket_api.websocket_command(schema)
     @websocket_api.async_response
     async def handler(hass: HomeAssistant, connection, msg) -> None:
         await _execute(hass, connection, msg, command)

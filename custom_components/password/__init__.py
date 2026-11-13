@@ -20,8 +20,12 @@ from .websocket import async_register_commands
 
 _LOGGER = logging.getLogger(__name__)
 DOMAIN = manifest.domain
-STATIC_URL = f'/{DOMAIN}'
-MODULE_URL = f'{STATIC_URL}/password-panel.js?v={manifest.version}'
+# 1) 静态资源路径必须与面板路由 /password 分开：同名目录资源会让直接访问
+#    或刷新 /password 被当成目录请求，返回 403 Forbidden。
+# 2) 路径里带集成版本：password-panel.js 的相对 import 会继承这个前缀，
+#    升级后所有 JS 模块一并换 URL，不必依赖浏览器强制刷新。
+STATIC_URL = f'/{DOMAIN}_static/{manifest.version}'
+MODULE_URL = f'{STATIC_URL}/password-panel.js'
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

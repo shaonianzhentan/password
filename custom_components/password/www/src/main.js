@@ -6,12 +6,13 @@ import { VaultView, STYLES } from './view.js';
 import { PANEL_HEADER_STYLES, PANEL_HEADER_HTML } from './panel-header.js';
 
 const PANEL_STYLES = `
-:host { display: block; min-height: 100%; }
+:host { display: flex; flex-direction: column; height: 100%; min-height: 360px; }
 * { box-sizing: border-box; }
 main {
-  width: 100%; padding: 0;
+  flex: 1; min-height: 0; width: 100%; padding: 0;
   color: var(--primary-text-color, #212121);
 }
+password-vault-card { display: block; height: 100%; }
 `;
 
 class PasswordVaultCard extends HTMLElement {
@@ -49,7 +50,13 @@ class PasswordVaultCard extends HTMLElement {
     this.view = new VaultView(
       this.shadowRoot.getElementById('root'), api, new Vault(api)
     );
+    this.view.setSidebarHidden(Boolean(this.sidebarHidden));
     this.view.start();
+  }
+
+  setSidebarHidden(hidden) {
+    this.sidebarHidden = Boolean(hidden);
+    if (this.view) this.view.setSidebarHidden(this.sidebarHidden);
   }
 
   lock() {
@@ -93,6 +100,7 @@ class PasswordPanel extends HTMLElement {
 
   set narrow(value) {
     this.narrowValue = value;
+    this.sync();
   }
 
   set route(value) {
@@ -110,20 +118,21 @@ class PasswordPanel extends HTMLElement {
         <main><password-vault-card></password-vault-card></main>`;
       this.card = this.shadowRoot.querySelector('password-vault-card');
     }
-    if (this.card && this.hassInstance) this.card.hass = this.hassInstance;
+    if (this.card && this.hassInstance) {
+      this.card.hass = this.hassInstance;
+      // 对齐 HA 的 ha-menu-button：窄屏或侧边栏设为「始终隐藏」时才显示汉堡按钮
+      this.card.setSidebarHidden(
+        Boolean(this.narrowValue)
+        || this.hassInstance.dockedSidebar === 'always_hidden'
+      );
+    }
   }
 
-  /** 运行时替换头部：传 HTML 字符串或 Node；传 null / 空串恢复默认头部。 */
+  /** 运行时注入自定义头部：传 HTML 字符串或 Node；传 null / 空串移除头部。 */
   setHeader(content) {
     this.sync();
     this.querySelectorAll('[slot="header"]').forEach((node) => node.remove());
-    if (content == null || content === '') {
-      // 注入空占位以屏蔽默认头部（slot fallback），让卡片自身头部成为唯一头部
-      const placeholder = document.createElement('div');
-      placeholder.slot = 'header';
-      this.appendChild(placeholder);
-      return;
-    }
+    if (content == null || content === '') return;
     const wrapper = document.createElement('div');
     wrapper.slot = 'header';
     if (content instanceof Node) wrapper.appendChild(content);
