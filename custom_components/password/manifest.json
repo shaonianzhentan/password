@@ -1,6 +1,9 @@
 {
   "domain": "password",
   "name": "我的密码",
+  "categories": [
+    "security_safety.locks_access"
+  ],
   "codeowners": [
     "@shaonianzhentan"
   ],
@@ -14,5 +17,5 @@
   "issue_tracker": "https://github.com/shaonianzhentan/password/issues",
   "requirements": [],
   "single_config_entry": true,
-  "version": "2026.11.13.15"
+  "version": "2026.11.16.6"
 }

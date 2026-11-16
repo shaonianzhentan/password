@@ -186,21 +186,19 @@ if (!localStorage.getItem(WRAP_KEY)) {
   }));
 }
 
-let store = { vault: null };
+// 预览后端：内存 + localStorage 模拟 format 4 的「keys + payload 数组」结构，
+// 命令与真实服务端一致（vault/get、keys/put、item/put、items/put、item/delete）。
+const EMPTY_STORE = () => ({ keys: null, items: [], revision: 0, keysRevision: 0 });
+let store = EMPTY_STORE();
 try {
-  store.vault = JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
+  const raw = JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
+  if (raw && raw.keys && Array.isArray(raw.items)) store = raw;
 } catch (err) {
-  store.vault = null;
+  store = EMPTY_STORE();
 }
 
 function persist() {
-  localStorage.setItem(STORE_KEY, JSON.stringify(store.vault));
-}
-
-function publicVault(vault) {
-  const result = { ...vault };
-  delete result.verifier;
-  return result;
+  localStorage.setItem(STORE_KEY, JSON.stringify(store));
 }
 
 function reply(data, message = null) {
@@ -208,20 +206,25 @@ function reply(data, message = null) {
   return data;
 }
 
+function checkProof(message) {
+  if (!store.keys) return '密码库尚未初始化';
+  if (message.unlockProof !== store.keys.verifier) return '未解锁或密钥不匹配';
+  return null;
+}
+
 async function callWS(message) {
   const command = String(message.type || '').replace('password/', '');
-  // 预览数据不提供迁移：格式不匹配时直接重建演示库
-  if (store.vault && store.vault.format !== 2) {
-    store.vault = null;
-    localStorage.removeItem(STORE_KEY);
-  }
 
   if (command === 'vault/get') {
     // 预览直接准备好演示库，跳过「首次设置主密码」界面
     await ensureVault();
     return reply({
       exists: true,
-      vault: publicVault(store.vault),
+      kdf: store.keys.kdf,
+      wrapped: store.keys.wrapped,
+      keysRevision: store.keysRevision,
+      items: store.items,
+      revision: store.revision,
       deviceUuid: 'preview-device-uuid-0000',
       deviceId: 'preview0000000000',
       deviceWrapped: true,
@@ -229,20 +232,76 @@ async function callWS(message) {
     });
   }
 
-  if (command === 'vault/put') {
+  if (command === 'keys/put') {
     if (message.create) {
-      if (store.vault) return reply(null, '密码库已初始化');
-      store.vault = { ...message.vault, revision: 1, updated: new Date().toISOString() };
+      if (store.keys) return reply(null, '密码库已初始化');
+      store.keys = { kdf: message.kdf, wrapped: message.wrapped, verifier: message.verifier };
+      store.keysRevision = 1;
+      store.revision = 1;
       persist();
-      return reply({ revision: 1, updated: store.vault.updated });
+      return reply({ keysRevision: 1, revision: 1 });
     }
-    if (!store.vault) return reply(null, '密码库尚未初始化');
-    if (message.unlockProof !== store.vault.verifier) return reply(null, '未解锁或密钥不匹配');
-    if (message.revision !== store.vault.revision) return reply(null, '数据已被其它页面修改，请刷新后重试');
-    const revision = store.vault.revision + 1;
-    store.vault = { ...message.vault, revision, updated: new Date().toISOString() };
+    const failed = checkProof(message);
+    if (failed) return reply(null, failed);
+    if (message.baseRevision !== undefined && message.baseRevision !== store.keysRevision) {
+      return reply(null, '主密码已在其它设备被修改，请刷新后重试');
+    }
+    store.keys = {
+      kdf: message.kdf,
+      wrapped: message.wrapped,
+      verifier: message.verifier || store.keys.verifier,
+    };
+    store.keysRevision += 1;
+    store.revision += 1;
     persist();
-    return reply({ revision, updated: store.vault.updated });
+    return reply({ keysRevision: store.keysRevision, revision: store.revision });
+  }
+
+  if (command === 'item/put') {
+    const failed = checkProof(message);
+    if (failed) return reply(null, failed);
+    const item = { ...message.item, updatedAt: new Date().toISOString() };
+    const index = store.items.findIndex((entry) => entry.id === item.id);
+    if (message.base === undefined) {
+      if (index >= 0) return reply(null, '该记录已存在，请刷新后重试');
+      store.items.unshift(item);
+    } else {
+      if (index < 0) return reply(null, '该记录已被删除');
+      if (String(store.items[index].updatedAt || '') !== message.base) {
+        return reply(null, '该记录已被其它设备修改，请刷新后重试');
+      }
+      store.items[index] = item;
+    }
+    store.revision += 1;
+    persist();
+    return reply({ item, revision: store.revision });
+  }
+
+  if (command === 'items/put') {
+    const failed = checkProof(message);
+    if (failed) return reply(null, failed);
+    let added = 0;
+    for (const item of message.items || []) {
+      const index = store.items.findIndex((entry) => entry.id === item.id);
+      if (index >= 0) store.items[index] = item;
+      else { store.items.unshift(item); added += 1; }
+    }
+    store.revision += 1;
+    persist();
+    return reply({ added, total: store.items.length, revision: store.revision });
+  }
+
+  if (command === 'item/delete') {
+    const failed = checkProof(message);
+    if (failed) return reply(null, failed);
+    const before = store.items.length;
+    store.items = store.items.filter((entry) => entry.id !== message.itemId);
+    if (store.items.length === before) {
+      return reply({ deleted: false, revision: store.revision });
+    }
+    store.revision += 1;
+    persist();
+    return reply({ deleted: true, revision: store.revision });
   }
 
   if (command === 'legacy/convert') {
@@ -272,7 +331,7 @@ const hass = { callWS };
 const api = createApi(hass);
 
 async function ensureVault() {
-  if (store.vault) return;
+  if (store.keys) return;
   const vault = new Vault(api);
   await vault.initialize(DEMO_PASSWORD, SAMPLE_ITEMS);
 }
@@ -392,7 +451,7 @@ document.getElementById('theme').addEventListener('click', (event) => {
   event.currentTarget.classList.toggle('active', !dark);
 });
 document.getElementById('reset').addEventListener('click', () => {
-  store.vault = null;
+  store = EMPTY_STORE();
   localStorage.removeItem(STORE_KEY);
   ensureVault().then(() => mount('unlocked')).catch(showError);
 });

@@ -157,7 +157,9 @@ dialog::backdrop {
   --pw-card-border: 1px solid var(--ha-card-border-color, var(--pw-line));
   --pw-card-shadow: var(--ha-card-box-shadow, none);
   --pw-scrim: rgba(0,0,0,.32);
-  --pw-header-h: 64px;
+  /* 跟随 HA 自身的顶栏高度（--header-height: 56px），与侧边栏 header 严格对齐；
+     主题或未来版本改了该变量，这里自动跟随 */
+  --pw-header-h: var(--header-height, 56px);
   --pw-backdrop:
     radial-gradient(70vw 70vw at 14% 8%, var(--pw-selected), transparent 68%),
     radial-gradient(65vw 65vw at 88% 92%, var(--pw-selected), transparent 70%),
@@ -982,10 +984,9 @@ export class VaultView {
     if (field === 'import-file' && event.target.files[0]) {
       try {
         const items = normalizeItems(JSON.parse(await event.target.files[0].text()));
-        await this.vault.importItems(items);
-        await this.vault.save();
+        const imported = await this.vault.importItems(items);
         this.render();
-        this.toast(`已导入 ${items.length} 条记录`);
+        this.toast(`已导入 ${imported} 条记录`);
       } catch (err) {
         this.toast(`导入失败：${err.message}`);
       }
@@ -1158,7 +1159,6 @@ export class VaultView {
       totp: form.value('totp'),
     };
     await this.vault.upsert(item);
-    await this.vault.save();
     this.dialog = null;
     this.editing = null;
     this.render();
@@ -1181,19 +1181,21 @@ export class VaultView {
   async confirmAction() {
     const options = this.confirm;
     if (!options || !['delete-item', 'revoke-credential'].includes(options.action)) return;
+    let message = '已删除';
     if (options.action === 'delete-item') {
-      this.vault.remove(options.id);
-      await this.vault.save();
+      const deleted = await this.vault.remove(options.id);
+      if (!deleted) message = '该记录已不存在，可能已在其它设备删除';
     } else {
       await this.api.deleteCredential(options.id, this.vault.proof);
       removeLocalWrap(options.id);
       this.credentials = await this.api.listCredentials();
+      message = '凭据已撤销';
     }
     this.dialog = options.action === 'revoke-credential' ? 'credentials' : null;
     this.editing = null;
     this.confirm = null;
     this.render();
-    this.toast(options.action === 'delete-item' ? '已删除' : '凭据已撤销');
+    this.toast(message);
   }
 
   async setupVault() {
@@ -1280,14 +1282,13 @@ export class VaultView {
     });
     const items = normalizeItems(result.items || []);
     if (!items.length) return this.toast('没有可导入的记录');
-    await this.vault.importItems(items);
-    await this.vault.save();
+    const imported = await this.vault.importItems(items);
     this.legacyContent = null;
     this.legacyFileName = '';
     this.dialog = null;
     this.render();
     const skipped = (result.failures || []).length;
-    this.toast(`已导入 ${items.length} 条历史记录${skipped ? `，${skipped} 条解密失败（请核对旧主密码与 UUID）` : ''}`);
+    this.toast(`已导入 ${imported} 条历史记录${skipped ? `，${skipped} 条解密失败（请核对旧主密码与 UUID）` : ''}`);
   }
 
   async openCredentials() {

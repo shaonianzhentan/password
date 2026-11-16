@@ -4,14 +4,17 @@
 按 connection.user 做管理员校验，命令与响应不出现在 URL 或访问日志中。
 
 服务端零知识：主密码只在浏览器内存，config entry 不保存任何密码材料；
-密码库在磁盘上由 core.uuid 派生的设备密钥整体包裹（见 device.py），
-服务端读写时自动解开/包裹，前端仍只见 format 2 的密码库。
-vault 的条目元数据对服务端可见，敏感字段由前端逐条加密；服务端只做结构
-校验，写操作需要 unlockProof（由 vaultKey 派生的 HMAC）与 revision 乐观锁。
+磁盘上的 password_vault.json 是逐条设备层 envelope（见 storage.py），
+服务端读写时自动解开/包裹，前端只看到 format 2 的条目明文元数据。
+
+条目级接口是并发的关键：vault/put 那种「整库回传」已经被 item/put、
+item/delete、items/put 取代——服务端按明文 id 定位记录，两条记录的写入互
+不覆盖，改一条只重算一条，删一条不需要解开任何条目密文。敏感字段（username
+/ password / totp）始终由前端逐条加密；服务端只做结构校验，写操作需要
+unlockProof（由 vaultKey 派生的 HMAC）。
 """
 from __future__ import annotations
 
-import hmac
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -26,18 +29,24 @@ from . import device
 from . import legacy
 from . import webauthn as wa
 from .manifest import manifest
-from .storage import VaultStorage
+from .storage import MAX_ITEMS, VaultError, VaultStorage, proof_ok
 
 _LOGGER = logging.getLogger(__name__)
 DOMAIN = manifest.domain
 PREFIX = f'{DOMAIN}/'
-VAULT_FIELDS = ('format', 'kdf', 'wrapped', 'items', 'verifier')
 # 旧版 password.json 通过 websocket 上传，拒绝任意大的消息体
 MAX_LEGACY_CONTENT = 2_000_000
+ID_MAX_LENGTH = 64
+ID_CHARS = set(
+    'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_'
+)
 
 COMMANDS = (
     f'{PREFIX}vault/get',
-    f'{PREFIX}vault/put',
+    f'{PREFIX}keys/put',
+    f'{PREFIX}item/put',
+    f'{PREFIX}items/put',
+    f'{PREFIX}item/delete',
     f'{PREFIX}legacy/convert',
     f'{PREFIX}device/info',
     f'{PREFIX}device/recover',
@@ -49,19 +58,41 @@ COMMANDS = (
     f'{PREFIX}webauthn/credentials/delete',
 )
 
-# websocket_command 只声明 type 时，HA 会把处理器标记为无 schema 并拒绝
-# 任何带附加字段的消息（"extra keys not allowed"）。因此必须按命令逐个
-# 声明前端可能携带的字段；无附加字段的命令保持空字典。
-# 注意 id 是 HA 的消息编号，业务里的凭据 ID 不能叫 id。
+# schema 行为（HA 2026.x 实测，decorators.py:149-152）：
+# 1) 只声明 type 时 len(schema) == 1，HA 置 func._ws_schema = False，该命令
+#    不做 schema 校验，多余字段直接放行；
+# 2) 声明了额外字段时，HA 用 BASE_COMMAND_MESSAGE_SCHEMA.extend(schema) 校验，
+#    未知字段被拒（extra keys not allowed）。因此必须按命令逐个声明前端可能
+#    携带的字段；无附加字段的命令保持空字典。
+# 3) 关键限制：base schema 已占用 id（probatio.Required("id") = cv.positive_int，
+#    即 websocket 消息序号）。extend 时后写的键会覆盖前值，所以业务字段绝不能
+#    叫 id —— 否则校验器拿消息序号（数字）去比对字符串，必报
+#    "expected str at 'id'. Got 43"。记录 id 一律放在 item 内或用 itemId 这类名字。
 _ORIGIN_KEY = {vol.Optional('accessOrigin'): str}
 
 COMMAND_SCHEMAS: dict[str, dict] = {
     'vault/get': {},
-    'vault/put': {
-        vol.Required('vault'): dict,
+    'keys/put': {
+        vol.Required('kdf'): dict,
+        vol.Required('wrapped'): dict,
+        vol.Optional('verifier'): str,
         vol.Optional('create'): bool,
+        vol.Optional('baseRevision'): int,
         vol.Optional('unlockProof'): str,
-        vol.Optional('revision'): int,
+    },
+    'item/put': {
+        vol.Required('item'): dict,
+        # 上次看到的 updatedAt，用于逐项 CAS；新增时不传
+        vol.Optional('base'): str,
+        vol.Optional('unlockProof'): str,
+    },
+    'items/put': {
+        vol.Required('items'): list,
+        vol.Optional('unlockProof'): str,
+    },
+    'item/delete': {
+        vol.Required('itemId'): str,
+        vol.Optional('unlockProof'): str,
     },
     'legacy/convert': {
         vol.Required('content'): str,
@@ -145,15 +176,24 @@ def _access_host(hass, msg) -> str:
     )
 
 
+# ------------------------------------------------------------- 结构校验
+
+
+def _valid_id(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and 0 < len(value) <= ID_MAX_LENGTH
+        and all(char in ID_CHARS for char in value)
+    )
+
+
 def _valid_item(item: Any) -> bool:
     """只校验明文元数据与密文容器的形状，不解析密文内容。"""
-    if not isinstance(item, dict):
+    if not isinstance(item, dict) or not _valid_id(item.get('id')):
         return False
-    for key in ('id', 'type', 'category', 'notes', 'updatedAt'):
+    for key in ('type', 'category', 'notes'):
         if not isinstance(item.get(key), str):
             return False
-    if not item['id']:
-        return False
     origins = item.get('origins')
     if not isinstance(origins, list) or not all(
         isinstance(origin, str) for origin in origins
@@ -165,94 +205,109 @@ def _valid_item(item: Any) -> bool:
         and isinstance(enc.get('alg'), str)
         and isinstance(enc.get('iv'), str)
         and isinstance(enc.get('ct'), str)
+        and bool(enc.get('ct'))
     )
 
 
-def _valid_vault(vault: Any) -> bool:
+def _valid_kdf(kdf: Any) -> bool:
     return (
-        isinstance(vault, dict)
-        and vault.get('format') == 2
-        and isinstance(vault.get('kdf'), dict)
-        and isinstance(vault.get('wrapped'), dict)
-        and isinstance(vault.get('items'), list)
-        and len(vault['items']) <= 10000
-        and all(_valid_item(item) for item in vault['items'])
-        and isinstance(vault.get('verifier'), str)
-        and len(vault['verifier']) >= 20
+        isinstance(kdf, dict)
+        and isinstance(kdf.get('salt'), str)
+        and bool(kdf.get('salt'))
+        and isinstance(kdf.get('iterations'), int)
+        and int(kdf.get('iterations') or 0) > 0
     )
 
 
-def _proof_ok(vault: dict | None, proof: Any) -> bool:
-    if not vault or not isinstance(proof, str):
-        return False
-    return hmac.compare_digest(proof, vault.get('verifier', ''))
+def _valid_wrapped(wrapped: Any) -> bool:
+    password = wrapped.get('password') if isinstance(wrapped, dict) else None
+    return (
+        isinstance(password, dict)
+        and isinstance(password.get('iv'), str)
+        and isinstance(password.get('ct'), str)
+    )
 
 
-async def _load_vault(hass):
-    return await hass.async_add_executor_job(_storage(hass).load_vault)
+async def _verifier(hass) -> str:
+    return await hass.async_add_executor_job(_storage(hass).verifier)
 
 
-async def _load_credentials(hass) -> dict:
-    return await hass.async_add_executor_job(_storage(hass).load_credentials)
-
-
-async def _save_credentials(hass, data: dict) -> None:
-    await hass.async_add_executor_job(_storage(hass).save_credentials, data)
+async def _require_unlock(hass, proof: Any) -> None:
+    """指纹注册、凭据撤销、旧数据转换共用的解锁证明校验。"""
+    if not proof_ok(await _verifier(hass), proof):
+        raise WsError('not_allowed', '请先解锁密码库')
 
 
 # --------------------------------------------------------------------- vault
 
+
 async def _vault_get(hass, connection, msg, host):
     info = await hass.async_add_executor_job(_storage(hass).device_info)
-    common = {
-        'deviceUuid': info['uuid'],
-        'canManageDevice': bool(connection.user and connection.user.is_admin),
-    }
-    vault = await _load_vault(hass)
-    if vault is None:
-        # 不再下发主密码：首次建库由前端在浏览器内收集并派生
-        return {
-            'exists': False,
-            'vault': None,
-            'deviceId': '',
-            'deviceWrapped': False,
-            **common,
-        }
-    public = {key: value for key, value in vault.items() if key != 'verifier'}
+    state = await hass.async_add_executor_job(_storage(hass).read_state)
     return {
-        'exists': True,
-        'vault': public,
+        'exists': state['exists'],
+        'kdf': state['kdf'],
+        'wrapped': state['wrapped'],
+        'keysRevision': state['keysRevision'],
+        'items': state['items'],
+        'revision': state['revision'],
+        'deviceUuid': info['uuid'],
         'deviceId': info['id'],
         'deviceWrapped': info['wrapped'],
-        **common,
+        'canManageDevice': bool(connection.user and connection.user.is_admin),
     }
 
 
-async def _vault_put(hass, connection, msg, host):
-    incoming = msg.get('vault')
-    if not _valid_vault(incoming):
-        raise WsError('invalid_format', '密码库数据格式无效')
+async def _keys_put(hass, connection, msg, host):
+    kdf = msg.get('kdf') or {}
+    wrapped = msg.get('wrapped') or {}
+    if not _valid_kdf(kdf) or not _valid_wrapped(wrapped):
+        raise WsError('invalid_format', '密钥参数格式无效')
+    return await hass.async_add_executor_job(
+        _storage(hass).put_keys,
+        bool(msg.get('create')),
+        kdf,
+        wrapped,
+        str(msg.get('verifier') or ''),
+        msg.get('baseRevision'),
+        msg.get('unlockProof'),
+    )
 
-    current = await _load_vault(hass)
-    create = bool(msg.get('create'))
-    if create and current is not None:
-        raise WsError('already_exists', '密码库已初始化')
-    if not create:
-        if current is None:
-            raise WsError('not_found', '密码库尚未初始化')
-        if not _proof_ok(current, msg.get('unlockProof')):
-            raise WsError('not_allowed', '未解锁或密钥不匹配')
-        if msg.get('revision') != current.get('revision'):
-            raise WsError('conflict', '数据已被其它页面修改，请刷新后重试')
 
-    clean = {key: incoming[key] for key in VAULT_FIELDS}
-    clean['revision'] = (current.get('revision', 0) if current else 0) + 1
-    clean['updated'] = datetime.now(timezone.utc).isoformat()
-    await hass.async_add_executor_job(_storage(hass).save_vault, clean)
-    return {'revision': clean['revision'], 'updated': clean['updated']}
+async def _item_put(hass, connection, msg, host):
+    item = msg.get('item')
+    if not _valid_item(item):
+        raise WsError('invalid_format', '记录数据格式无效')
+    return await hass.async_add_executor_job(
+        _storage(hass).put_item,
+        item,
+        msg.get('base'),
+        msg.get('unlockProof'),
+    )
+
+
+async def _items_put(hass, connection, msg, host):
+    items = msg.get('items') or []
+    if len(items) > MAX_ITEMS:
+        raise WsError('invalid_format', f'记录数超过 {MAX_ITEMS} 条上限')
+    if not all(_valid_item(item) for item in items):
+        raise WsError('invalid_format', '记录数据格式无效')
+    return await hass.async_add_executor_job(
+        _storage(hass).put_items, items, msg.get('unlockProof')
+    )
+
+
+async def _item_delete(hass, connection, msg, host):
+    ident = msg.get('itemId')
+    if not _valid_id(ident):
+        raise WsError('invalid_format', '记录 id 无效')
+    return await hass.async_add_executor_job(
+        _storage(hass).delete_item, ident, msg.get('unlockProof')
+    )
 
 
 # ------------------------------------------------------------- 设备层恢复
+
 
 async def _device_info(hass, connection, msg, host):
     """设备 UUID 不匹配时，前端仍需要显示「当前」UUID 以对照旧值。"""
@@ -291,11 +346,10 @@ async def _device_recover(hass, connection, msg, host):
 
 # ----------------------------------------------------------- 旧版历史数据转换
 
+
 async def _legacy_convert(hass, connection, msg, host):
     """解密旧版 3DES 文件，返回新版明文字段；明文只在已解锁的浏览器内存里。"""
-    vault = await _load_vault(hass)
-    if not _proof_ok(vault, msg.get('unlockProof')):
-        raise WsError('not_allowed', '请先解锁密码库')
+    await _require_unlock(hass, msg.get('unlockProof'))
 
     content = str(msg.get('content') or '')
     if not content or len(content) > MAX_LEGACY_CONTENT:
@@ -324,6 +378,7 @@ async def _legacy_convert(hass, connection, msg, host):
 
 # ------------------------------------------------------------------ WebAuthn
 
+
 async def _register_options(hass, connection, msg, host):
     user = connection.user
     challenge = wa.challenges.create('register', user.id, host)
@@ -337,9 +392,7 @@ async def _register_options(hass, connection, msg, host):
 
 
 async def _register_verify(hass, connection, msg, host):
-    vault = await _load_vault(hass)
-    if not _proof_ok(vault, msg.get('unlockProof')):
-        raise WsError('not_allowed', '请先使用密码解锁')
+    await _require_unlock(hass, msg.get('unlockProof'))
 
     user = connection.user
     challenge = str(msg.get('challenge', ''))
@@ -363,7 +416,9 @@ async def _register_verify(hass, connection, msg, host):
     if len(secret) != 32:
         raise WsError('invalid_registration', '解锁凭据长度无效')
 
-    store = await _load_credentials(hass)
+    store = await hass.async_add_executor_job(
+        _storage(hass).load_credentials
+    )
     store['credentials'] = [
         item for item in store['credentials']
         if item.get('id') != parsed['credential_id']
@@ -378,13 +433,15 @@ async def _register_verify(hass, connection, msg, host):
         'name': str(msg.get('name', '') or '本设备')[:64],
         'created': datetime.now(timezone.utc).isoformat(),
     })
-    await _save_credentials(hass, store)
+    await hass.async_add_executor_job(_storage(hass).save_credentials, store)
     return {'id': parsed['credential_id']}
 
 
 async def _auth_options(hass, connection, msg, host):
     user = connection.user
-    store = await _load_credentials(hass)
+    store = await hass.async_add_executor_job(
+        _storage(hass).load_credentials
+    )
     challenge = wa.challenges.create('authenticate', user.id, host)
     return {
         'challenge': challenge,
@@ -404,7 +461,9 @@ async def _auth_verify(hass, connection, msg, host):
 
     credential = msg.get('credential') or {}
     response = credential.get('response') or {}
-    store = await _load_credentials(hass)
+    store = await hass.async_add_executor_job(
+        _storage(hass).load_credentials
+    )
     record = next(
         (item for item in store['credentials'] if item.get('id') == credential.get('id')),
         None,
@@ -418,12 +477,14 @@ async def _auth_verify(hass, connection, msg, host):
     except (KeyError, TypeError, ValueError, wa.WebAuthnError) as err:
         raise WsError('invalid_assertion', f'指纹验证失败：{err}') from err
 
-    await _save_credentials(hass, store)
+    await hass.async_add_executor_job(_storage(hass).save_credentials, store)
     return {'credSecret': record['cred_secret']}
 
 
 async def _credentials_list(hass, connection, msg, host):
-    store = await _load_credentials(hass)
+    store = await hass.async_add_executor_job(
+        _storage(hass).load_credentials
+    )
     return [
         {
             'id': item['id'],
@@ -435,24 +496,27 @@ async def _credentials_list(hass, connection, msg, host):
 
 
 async def _credentials_delete(hass, connection, msg, host):
-    vault = await _load_vault(hass)
-    if not _proof_ok(vault, msg.get('unlockProof')):
-        raise WsError('not_allowed', '请先解锁')
+    await _require_unlock(hass, msg.get('unlockProof'))
     credential_id = msg.get('credentialId')
-    store = await _load_credentials(hass)
+    store = await hass.async_add_executor_job(
+        _storage(hass).load_credentials
+    )
     before = len(store['credentials'])
     store['credentials'] = [
         item for item in store['credentials'] if item.get('id') != credential_id
     ]
     if len(store['credentials']) == before:
         raise WsError('not_found', '凭据不存在')
-    await _save_credentials(hass, store)
+    await hass.async_add_executor_job(_storage(hass).save_credentials, store)
     return {}
 
 
 HANDLERS = {
     'vault/get': _vault_get,
-    'vault/put': _vault_put,
+    'keys/put': _keys_put,
+    'item/put': _item_put,
+    'items/put': _items_put,
+    'item/delete': _item_delete,
     'legacy/convert': _legacy_convert,
     'device/info': _device_info,
     'device/recover': _device_recover,
@@ -484,6 +548,10 @@ async def _execute(hass: HomeAssistant, connection, msg, command: str) -> None:
         host = _access_host(hass, msg) if command in HOST_COMMANDS else ''
         result = await handler(hass, connection, msg, host)
     except WsError as err:
+        connection.send_error(msg['id'], err.code, err.message)
+        return
+    except VaultError as err:
+        # 存储层的业务错误（冲突 / 未解锁 / 记录不存在）原样带给前端
         connection.send_error(msg['id'], err.code, err.message)
         return
     except device.DeviceError as err:

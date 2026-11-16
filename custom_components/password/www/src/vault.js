@@ -1,35 +1,42 @@
-/* 密码库状态机：明文元数据 + 逐条 AES-GCM 密文、按需解密、乐观锁保存。
+/* 密码库状态机：明文元数据 + 逐条 AES-GCM 密文、按需解密、条目级提交。
  *
- * === 数据契约（format 2）===
+ * === 磁盘契约（format 4，见服务端 storage.py）===
  * .storage/password_vault.json 顶层：
- *   { format: 2, kdf, verifier, wrapped, items[], revision, updated }
+ *   { format: 4, device: { alg, kdf, salt, id }, created,
+ *     keys: { iv, ct },                 // kdf / verifier / wrapped 的设备层 envelope
+ *     payload: [ { id, iv, ct }, ... ], // 每条记录一份独立 envelope
+ *     revision }
+ * 设备层完全由服务端负责：前端看不到也不需要设备密钥。
+ *
+ * === 前端契约 ===
+ * keys 解开后是 { format: 2, kdf, verifier, wrapped.password, keysRevision }
  *   kdf      = { alg: 'PBKDF2-SHA256', salt: b64, iterations: 600000, hash: 'SHA-256' }
- *   verifier = HMAC(vaultKey, 'password/unlock/v1')，写命令携带它做解锁证明
+ *   verifier = HMAC(vaultKey, 'password/unlock/v1')，写操作作为 unlockProof
  *   wrapped.password = { iv, ct }，主密码派生的 KEK 包裹随机 32 字节 vaultKey
- *   revision / updated 由服务端写入，revision 用于乐观锁
  *
  * items[] 每项：
  *   明文：id / type / category / origins[] / notes / updatedAt
- *   密文：enc = { alg: 'AES-256-GCM', iv, ct }，ct 解密后为
- *         { username, password, totp }
+ *   密文：enc = { alg: 'AES-256-GCM', iv, ct }，解密后为 { username, password, totp }
  *   notes 第一行作为列表显示名；type 目前固定 'login'
  *
  * AAD = JSON.stringify([id, type, category, origins, notes]) 的 UTF-8 字节，
  * 不含 updatedAt / revision。明文元数据一旦被改动，该条解密立即失败；
  * 编辑任一元数据字段都要用新 IV 重新加密这一条。
  *
- * 同步：全量 password/vault/get + 带 revision 的 password/vault/put；
- * 改一条只重加密一条，其余条目连同 IV 原样写回。
- * WebAuthn 包裹沿用「服务端 credSecret + 浏览器 localStorage 本地包裹」，
- * 不写入 vault 文件。
+ * 同步：解锁时全量 vault/get，此后只提交单条——
+ *   upsert → item/put（带上一次看到的 updatedAt 做逐项 CAS）
+ *   remove → item/delete（按 id 删，服务端不解开任何条目密文）
+ *   importItems → items/put 批量
+ * 两台设备改不同记录互不覆盖；改同一条会得到 item_conflict。
  *
  * 服务端零知识：主密码只在浏览器内存，config entry 不保存任何密码材料；
- * 磁盘上的 password_vault.json 是设备层 envelope（core.uuid 派生密钥的
- * AES-256-GCM），由服务端读写时自动解开/包裹，前端仍只见 format 2。
+ * 磁盘上的条目是服务端再包一层设备层密钥，前端只看到 format 2 的元数据。
+ * WebAuthn 包裹沿用「服务端 credSecret + 浏览器 localStorage 本地包裹」，
+ * 不写入 vault 文件。
  */
 
 import {
-  VAULT_FORMAT, ITERATIONS, b64, ub64, randomBytes,
+  ITERATIONS, b64, ub64, randomBytes,
   deriveKek, encryptBytes, decryptBytes, encryptJson, decryptJson, unlockProof,
 } from './crypto.js';
 
@@ -43,6 +50,16 @@ const SECRET_FIELDS = ['username', 'password', 'totp'];
 function originsOf(value) {
   const list = Array.isArray(value) ? value : text(value).split(/[\n,]+/);
   return list.map((item) => text(item).trim()).filter(Boolean);
+}
+
+/** 时间戳统一成 toISOString 形态。
+ * 服务端对可解析的 updatedAt 原样保留，因此前端缓存与磁盘字符串逐字符一致，
+ * 下一次编辑的 CAS 比对不会被误判成冲突。 */
+function stampOf(value) {
+  const raw = text(value).trim();
+  if (!raw) return now();
+  const ms = Date.parse(raw);
+  return Number.isNaN(ms) ? now() : new Date(ms).toISOString();
 }
 
 export function metaOf(item) {
@@ -96,9 +113,14 @@ export class Vault {
   constructor(api) {
     this.api = api;
     this.exists = false;
-    this.raw = null;
+    // 头部：解锁参数（明文元数据，不含任何密钥材料）
+    this.kdf = null;
+    this.wrapped = null;
+    this.keysRevision = 0;
+    // 运行时：主密码派生的数据密钥与解锁证明，只存在于内存
     this.key = null;
     this.proof = null;
+    // 条目缓存（服务端快照）与全局 revision
     this.items = [];
     this.revision = 0;
     this.device = { uuid: '', id: '', wrapped: false, canManage: false };
@@ -117,15 +139,20 @@ export class Vault {
       wrapped: Boolean(data.deviceWrapped),
       canManage: Boolean(data.canManageDevice),
     };
-    // 服务端不再下发任何密码材料，首次建库由界面在浏览器内收集主密码
-    if (!data.exists) return 'setup';
-    const vault = data.vault;
-    if (!vault || vault.format !== VAULT_FORMAT) {
-      throw new Error('密码库是旧格式，本版本不提供迁移。请删除 HA 配置目录下的 .storage/password_vault.json 后重新打开面板建库');
+    if (!data.exists) {
+      this.exists = false;
+      this.items = [];
+      return 'setup';
+    }
+    if (!data.kdf || !data.wrapped) {
+      throw new Error('密码库缺少解锁参数，请检查 .storage/password_vault.json 是否损坏');
     }
     this.exists = true;
-    this.raw = vault;
-    this.revision = vault.revision || 0;
+    this.kdf = data.kdf;
+    this.wrapped = data.wrapped;
+    this.keysRevision = data.keysRevision || 0;
+    this.items = Array.isArray(data.items) ? data.items : [];
+    this.revision = data.revision || 0;
     return 'ready';
   }
 
@@ -136,7 +163,7 @@ export class Vault {
     const enc = await encryptJson(key, secret, aadOf(meta));
     return {
       ...meta,
-      updatedAt: item.updatedAt || now(),
+      updatedAt: stampOf(item.updatedAt),
       enc: { alg: 'AES-256-GCM', ...enc },
     };
   }
@@ -147,33 +174,41 @@ export class Vault {
     const key = randomBytes(32);
     const kek = await deriveKek(password, salt, ITERATIONS);
     const proof = await unlockProof(key);
+    const kdf = {
+      alg: 'PBKDF2-SHA256', salt: b64(salt), iterations: ITERATIONS, hash: 'SHA-256',
+    };
+    const wrapped = { password: await encryptBytes(kek, key) };
+
+    const result = await this.api.putKeys({
+      create: true, kdf, wrapped, verifier: proof,
+    });
+    this.key = key;
+    this.proof = proof;
+    this.kdf = kdf;
+    this.wrapped = wrapped;
+    this.keysRevision = result.keysRevision || 1;
+    this.revision = result.revision || 1;
+    this.exists = true;
+    this.items = [];
+
     const items = [];
     for (const item of normalizeItems(importedItems)) {
       items.push(await this.seal(item, key));
     }
-    const vault = {
-      format: VAULT_FORMAT,
-      kdf: { alg: 'PBKDF2-SHA256', salt: b64(salt), iterations: ITERATIONS, hash: 'SHA-256' },
-      verifier: proof,
-      wrapped: { password: await encryptBytes(kek, key) },
-      items,
-    };
-    const result = await this.api.putVault({ create: true, vault });
-    this.key = key;
-    this.proof = proof;
-    this.items = items;
-    this.revision = result.revision;
-    this.raw = vault;
-    this.exists = true;
+    if (items.length) {
+      const saved = await this.api.putItems({ items, unlockProof: proof });
+      this.items = items;
+      this.revision = saved.revision || this.revision;
+    }
   }
 
   async unlockWithPassword(password) {
-    if (!this.raw) throw new Error('密码库尚未初始化');
-    const salt = ub64(this.raw.kdf.salt);
-    const kek = await deriveKek(password, salt, this.raw.kdf.iterations || ITERATIONS);
+    if (!this.kdf) throw new Error('密码库尚未初始化');
+    const salt = ub64(this.kdf.salt);
+    const kek = await deriveKek(password, salt, this.kdf.iterations || ITERATIONS);
     let key;
     try {
-      key = await decryptBytes(kek, this.raw.wrapped.password);
+      key = await decryptBytes(kek, this.wrapped.password);
     } catch (err) {
       throw new Error('主密码错误');
     }
@@ -190,25 +225,17 @@ export class Vault {
     await this.adoptKey(key);
   }
 
+  /* 两条解锁路径都是「用 KEK / 本地密钥解开一段 GCM 密文」，GCM 的认证标签
+   * 本身就能证明密钥正确，所以这里不必再去试探条目——否则单条元数据被改动
+   * 会导致整个库都解不开。逐条损坏只在 reveal 该条时报错。 */
   async adoptKey(key) {
-    const items = Array.isArray(this.raw.items) ? this.raw.items : [];
-    // 用第一条自检密钥是否正确；列表本身不需要解密任何条目。
-    if (items.length) {
-      try {
-        await decryptJson(key, items[0].enc, aadOf(metaOf(items[0])));
-      } catch (err) {
-        throw new Error('数据解密失败，密钥不正确或明文元数据已被改动');
-      }
-    }
     this.key = key;
     this.proof = await unlockProof(key);
-    this.items = items;
   }
 
   lock() {
     this.key = null;
     this.proof = null;
-    this.items = [];
   }
 
   /** 只解密指定条目；列表渲染不触发任何解密。 */
@@ -232,60 +259,73 @@ export class Vault {
     };
   }
 
-  /** 只重加密被修改的这一条，其余条目连同 IV 原样保留。 */
+  /** 只重加密被修改的这一条，并提交到服务端（带逐项 CAS）。 */
   async upsert(item) {
     if (!this.unlocked) throw new Error('请先解锁');
     const sealed = await this.seal({ ...item, updatedAt: now() }, this.key);
-    const index = item.id ? this.items.findIndex((entry) => entry.id === item.id) : -1;
-    if (index >= 0) this.items[index] = sealed;
-    else this.items.unshift(sealed);
+    const cached = this.items.find((entry) => entry.id === sealed.id);
+    const payload = { item: sealed, unlockProof: this.proof };
+    // 新增不传 base；编辑带上一次看到的 updatedAt，服务端据此判断是否被别人改过
+    if (cached) payload.base = text(cached.updatedAt);
+
+    const result = await this.api.putItem(payload);
+    const stored = result.item;
+    const index = this.items.findIndex((entry) => entry.id === stored.id);
+    if (index >= 0) this.items[index] = stored;
+    else this.items.unshift(stored);
+    this.revision = result.revision || this.revision;
+    return stored;
   }
 
+  /** 批量写入（导入备份 / 旧版转换）：一次提交，全成或全不成。 */
   async importItems(plainItems) {
+    if (!this.unlocked) throw new Error('请先解锁');
     const existing = new Set(this.items.map((item) => item.id));
+    const sealed = [];
     for (const item of plainItems) {
       const next = { ...item };
       if (!next.id || existing.has(next.id)) next.id = crypto.randomUUID();
       existing.add(next.id);
-      await this.upsert(next);
+      sealed.push(await this.seal(next, this.key));
     }
+    if (!sealed.length) return 0;
+    const result = await this.api.putItems({ items: sealed, unlockProof: this.proof });
+    this.items = [...sealed, ...this.items];
+    this.revision = result.revision || this.revision;
+    return sealed.length;
   }
 
-  remove(id) {
-    this.items = this.items.filter((item) => item.id !== id);
-  }
-
-  async save() {
+  /** 按 id 删除单条；返回 false 表示服务端已经没有这条（幂等）。 */
+  async remove(id) {
     if (!this.unlocked) throw new Error('请先解锁');
-    const vault = {
-      format: VAULT_FORMAT,
-      kdf: this.raw.kdf,
-      wrapped: this.raw.wrapped,
-      verifier: this.proof,
-      items: this.items,
-    };
-    const result = await this.api.putVault({
-      vault,
-      unlockProof: this.proof,
-      revision: this.revision,
-    });
-    this.raw = vault;
-    this.revision = result.revision;
+    const result = await this.api.deleteItem({ itemId: id, unlockProof: this.proof });
+    if (result.deleted) this.items = this.items.filter((item) => item.id !== id);
+    this.revision = result.revision || this.revision;
+    return Boolean(result.deleted);
   }
 
   async changePassword(password) {
     if (!this.unlocked) throw new Error('请先解锁');
     const salt = randomBytes(16);
     const kek = await deriveKek(password, salt, ITERATIONS);
-    this.raw = {
-      ...this.raw,
-      kdf: { alg: 'PBKDF2-SHA256', salt: b64(salt), iterations: ITERATIONS, hash: 'SHA-256' },
-      wrapped: {
-        ...this.raw.wrapped,
-        password: await encryptBytes(kek, this.key),
-      },
+    const kdf = {
+      alg: 'PBKDF2-SHA256', salt: b64(salt), iterations: ITERATIONS, hash: 'SHA-256',
     };
-    await this.save();
+    const wrapped = {
+      ...this.wrapped,
+      password: await encryptBytes(kek, this.key),
+    };
+    const result = await this.api.putKeys({
+      kdf,
+      wrapped,
+      verifier: this.proof,
+      baseRevision: this.keysRevision,
+      unlockProof: this.proof,
+    });
+    this.kdf = kdf;
+    this.wrapped = wrapped;
+    this.keysRevision = result.keysRevision || this.keysRevision + 1;
+    this.revision = result.revision || this.revision;
   }
 
   get categories() {

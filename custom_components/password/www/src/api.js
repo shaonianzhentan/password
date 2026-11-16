@@ -28,7 +28,10 @@ export function createApi(hass) {
 
   return {
     getVault: () => call('vault/get'),
-    putVault: (payload) => call('vault/put', payload),
+    putKeys: (payload) => call('keys/put', payload),
+    putItem: (payload) => call('item/put', payload),
+    putItems: (payload) => call('items/put', payload),
+    deleteItem: (payload) => call('item/delete', payload),
     convertLegacy: (payload) => call('legacy/convert', payload),
     getDeviceInfo: () => call('device/info'),
     recoverDevice: (oldUuid) => call('device/recover', { oldUuid }),

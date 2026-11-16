@@ -4,7 +4,7 @@
     "step": {
       "user": {
         "title": "添加我的密码",
-        "description": "主密码将在首次打开面板时于浏览器内设置，HomeAssistant 不会保存它，忘记后无法恢复。当前设备 UUID：{uuid} 请单独复制保存这份 UUID，不要与 HA 备份放在一起；重装 HomeAssistant 或只恢复密码库文件时，需要它来重新绑定设备。",
+        "description": "主密码将在首次打开面板时于浏览器内设置，HomeAssistant 不会保存它，忘记后无法恢复。当前设备 UUID：**{uuid}** 请单独复制保存这份 UUID，不要与 HA 备份放在一起；重装 HomeAssistant 或只恢复密码库文件时，需要它来重新绑定设备。",
         "data": {
           "require_admin": "仅管理员可访问"
         }

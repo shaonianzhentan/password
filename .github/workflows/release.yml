@@ -1,0 +1,65 @@
+# 打 tag 发布：先跑与 validate.yml 相同的两套校验，通过后再发 Release。
+#
+# 约定：tag 名 = v + custom_components/password/manifest.json 的 version。
+# HACS/Marketplace 靠 release 判断更新，tag 与 manifest 版本不一致会让
+# 用户永远收不到新版本（或收到一个版本号对不上的包），所以在发版前硬校验。
+#
+# 产物 password.zip 保留了 custom_components/password/ 完整路径，
+# 解压后直接覆盖 HA 配置目录即可；未启用 hacs.json 的 zip_release，
+# 市场仍从仓库取代码，zip 只作为手动安装与归档用。
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    name: Validate before release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Hassfest
+        uses: home-assistant/actions/hassfest@master
+
+      - name: HACS validation
+        uses: hacs/action@main
+        with:
+          category: integration
+
+  release:
+    name: Build and publish
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check tag matches manifest version
+        run: |
+          manifest=$(python3 -c 'import json;print(json.load(open("custom_components/password/manifest.json"))["version"])')
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$manifest" != "$tag" ]; then
+            echo "::error::manifest.json version ($manifest) 与 tag ($tag) 不一致，请先对齐再打 tag"
+            exit 1
+          fi
+          echo "版本一致：$manifest"
+
+      - name: Build zip
+        run: |
+          zip -r password.zip custom_components/password \
+            -x "*/__pycache__/*" "*.pyc"
+          unzip -l password.zip | head -20
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: password.zip
+          generate_release_notes: true
+          fail_on_unmatched_files: true

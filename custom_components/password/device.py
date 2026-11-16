@@ -1,10 +1,17 @@
-"""设备层：用 HomeAssistant 的 core.uuid 把密码库整体包成加密 envelope。
+"""设备层：用 HomeAssistant 的 core.uuid 派生的密钥包裹磁盘数据。
 
-磁盘格式（format 3）：
-  { format: 3, device: { alg, kdf, salt, id }, payload: { iv, ct }, created }
+密钥材料（两种布局共用）：
   deviceKey = HKDF-SHA256(core.uuid, device.salt, "password/device/v1")
+  device.id = HMAC(deviceKey, "password/device-id/v1")[:16]，仅用于展示与校验
+
+format 3（整块 envelope，凭据文件与迁移兼容）：
+  { format: 3, device: { alg, kdf, salt, id }, payload: { iv, ct }, created }
   payload.ct = AES-256-GCM(deviceKey, inner_json, aad=外层头字段)
-  device.id  = HMAC(deviceKey, "password/device-id/v1")[:8].hex()，仅用于展示
+
+format 4（密码库逐条 envelope，见 storage.py）：
+  文件头仍是一份 device 头；keys 与 payload 数组的每一项各自独立 seal()，
+  AAD = [作用域, device.id, 条目 id]，因此删除一条不必解开任何密文，
+  也不能把某条的密文挪到另一条的 id 下面。
 
 服务端只处理密文，不需要也拿不到浏览器内存里的主密码。core.uuid 是
 「设备因子」而非机密：它与密码库同在 .storage 下，因此这一层防的是
@@ -29,9 +36,12 @@ try:
 except ImportError:  # 不因缺少依赖导致整个集成加载失败
     AESGCM = None
 
-FORMAT = 3
+FORMAT = 3          # 整块 envelope：凭据文件、旧版密码库与迁移兼容
+VAULT_FORMAT = 4    # 逐条 envelope：当前密码库的磁盘格式（见 storage.py）
 ALG = 'AES-256-GCM'
 KDF = 'HKDF-SHA256'
+KEYS_SCOPE = 'password/keys/v1'
+ITEM_SCOPE = 'password/item/v1'
 KEY_INFO = b'password/device/v1'
 ID_INFO = b'password/device-id/v1'
 NONCE_LENGTH = 12
@@ -42,11 +52,11 @@ class DeviceError(Exception):
     """设备层无法解开（UUID 不匹配、文件损坏或环境缺少依赖）。"""
 
 
-def _b64(data: bytes) -> str:
+def b64(data: bytes) -> str:
     return base64.b64encode(data).decode('ascii')
 
 
-def _ub64(value: Any) -> bytes:
+def ub64(value: Any) -> bytes:
     return base64.b64decode(str(value or ''))
 
 
@@ -112,7 +122,7 @@ def wrap(
         raise DeviceError('当前环境缺少 cryptography，无法启用设备层加密')
     if previous is not None and is_envelope(previous):
         if salt is None:
-            salt = _ub64(previous['device']['salt'])
+            salt = ub64(previous['device']['salt'])
         if created is None:
             created = str(previous.get('created') or '') or None
     salt = salt or os.urandom(SALT_LENGTH)
@@ -122,7 +132,7 @@ def wrap(
         'device': {
             'alg': ALG,
             'kdf': KDF,
-            'salt': _b64(salt),
+            'salt': b64(salt),
             'id': device_id(key),
         },
         'payload': {},
@@ -131,7 +141,7 @@ def wrap(
     nonce = os.urandom(NONCE_LENGTH)
     plain = json.dumps(inner, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
     ct = AESGCM(key).encrypt(nonce, plain, _aad(envelope))
-    envelope['payload'] = {'iv': _b64(nonce), 'ct': _b64(ct)}
+    envelope['payload'] = {'iv': b64(nonce), 'ct': b64(ct)}
     return envelope
 
 
@@ -140,11 +150,11 @@ def unwrap(envelope: dict, uuid: str) -> dict:
         raise DeviceError('当前环境缺少 cryptography，无法解开设备层')
     try:
         head = envelope['device']
-        key = device_key(uuid, _ub64(head['salt']))
+        key = device_key(uuid, ub64(head['salt']))
         if not hmac.compare_digest(device_id(key), str(head.get('id') or '')):
             raise DeviceError('设备指纹不匹配，密码库可能由另一台 HomeAssistant 的 UUID 包裹')
-        nonce = _ub64(envelope['payload']['iv'])
-        ct = _ub64(envelope['payload']['ct'])
+        nonce = ub64(envelope['payload']['iv'])
+        ct = ub64(envelope['payload']['ct'])
         plain = AESGCM(key).decrypt(nonce, ct, _aad(envelope))
         inner = json.loads(plain.decode('utf-8'))
     except DeviceError:
@@ -157,3 +167,50 @@ def unwrap(envelope: dict, uuid: str) -> dict:
     if not isinstance(inner, dict):
         raise DeviceError('设备层内容格式无效')
     return inner
+
+
+# ------------------------------------------------------------ 逐项（format 4）
+
+
+def scope_aad(scope: str, device_id: str, ident: str = '') -> bytes:
+    """逐项 envelope 的 AAD：绑定作用域、设备指纹与条目 id。
+
+    id 必须参与 AAD：否则能写文件的人可以把 A 条的密文挪到 B 条的 id 下面，
+    或用同一条密文伪造出多条记录，而前端无从察觉。绑定 device.id 则让密文
+    无法在「不同 salt / 不同密码库文件」之间调包。
+    """
+    return json.dumps(
+        [scope, device_id, ident], separators=(',', ':')
+    ).encode('utf-8')
+
+
+def seal(plain: dict, key: bytes, aad: bytes) -> dict:
+    """用设备密钥加密一条记录，返回 {iv, ct}（每次随机 nonce）。"""
+    if AESGCM is None:
+        raise DeviceError('当前环境缺少 cryptography，无法启用设备层加密')
+    nonce = os.urandom(NONCE_LENGTH)
+    body = json.dumps(plain, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+    ct = AESGCM(key).encrypt(nonce, body, aad)
+    return {'iv': b64(nonce), 'ct': b64(ct)}
+
+
+def unseal(blob: Any, key: bytes, aad: bytes) -> dict:
+    """解开一条记录；AAD 不符或密文被改动都会抛 DeviceError。"""
+    if AESGCM is None:
+        raise DeviceError('当前环境缺少 cryptography，无法解开设备层')
+    if not isinstance(blob, dict):
+        raise DeviceError('设备层条目格式无效')
+    try:
+        nonce = ub64(blob['iv'])
+        ct = ub64(blob['ct'])
+    except (KeyError, TypeError, ValueError) as err:
+        raise DeviceError(f'设备层条目缺少 iv / ct：{err}') from err
+    try:
+        plain = json.loads(AESGCM(key).decrypt(nonce, ct, aad).decode('utf-8'))
+    except ValueError as err:
+        raise DeviceError(f'设备层条目内容损坏：{err}') from err
+    except Exception as err:
+        raise DeviceError('密文校验失败：数据已被篡改，或与当前设备密钥不匹配') from err
+    if not isinstance(plain, dict):
+        raise DeviceError('设备层条目内容格式无效')
+    return plain
