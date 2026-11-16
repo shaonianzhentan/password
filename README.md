@@ -1,27 +1,89 @@
 # PASSWORD
 
-在HomeAssistant中管理我的密码
+在 HomeAssistant 中管理我的密码。侧边栏面板，支持主密码与指纹解锁，无需额外服务。
 
 [![hacs_badge](https://img.shields.io/badge/Home-Assistant-%23049cdb)](https://www.home-assistant.io/)
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-![visit](https://visitor-badge.laobi.icu/badge?page_id=shaonianzhentan.password&left_text=visit)
+[![Validate](https://github.com/shaonianzhentan/password/actions/workflows/validate.yml/badge.svg)](https://github.com/shaonianzhentan/password/actions/workflows/validate.yml)
 
-## 使用方式
+## 安装
 
-安装完成重启HA，刷新一下页面，在集成里搜索`我的密码`即可
+1. **市场**（HomeAssistant 2026.11 起，HACS 已内置为「市场」）→ 搜索「我的密码」安装；2026.11 之前的 HA 仍用 HACS → 集成 → 自定义仓库，添加本仓库，类别选 **Integration**；也可以手动把 `custom_components/password/` 复制到 HA 配置目录，或解压本仓库 Release 里的 `password.zip`。
+2. 重启 HomeAssistant。
+3. 设置 → 设备与服务 → 添加集成 → 搜索「我的密码」，勾选「仅管理员可访问」。**这里不需要填写主密码**；表单会显示当前设备的 `core.uuid`，请**单独复制保存**（纸质、独立密码管理器条目），不要和 HA 备份放在一起。
+4. 侧边栏出现「我的密码」；首次打开会要求**在浏览器内设置主密码**（建议 12 位以上随机口令并离线保存）。创建后立即锁定，需要再输入一次以确认记住了。
 
-[![Add Integration](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start?domain=password)
+> 升级后若界面没有变化，强制刷新浏览器（Ctrl/Cmd + Shift + R）。
+
+## 重要前提：HTTPS
+
+必须通过 `https://` 或 `localhost` 访问 HomeAssistant。使用 `http://局域网IP:8123` 时面板会提示「当前页面不是安全上下文」，主密码与指纹都无法使用；建议配置反向代理证书或 Nabu Casa 远程访问。指纹解锁还要求设备有可用的平台认证器（Windows Hello / Touch ID / Android 生物识别）。
+
+## 安全模型
+
+- **服务端零知识**：主密码只在浏览器内存里，添加集成时不收集、config entry 不保存、不写日志、不出现在 URL 中。服务端只存密文和一个由随机 `vaultKey` 派生的校验值（`verifier`），无法反推主密码。忘记主密码 = 数据无法恢复。
+- **前端加密**：PBKDF2-SHA256（600000 次迭代、随机 salt）派生 KEK 包裹随机 `vaultKey`；每条记录用 AES-256-GCM 独立加密（随机 IV，AAD 绑定明文元数据），服务端只做结构校验。
+- **设备层包裹**：磁盘上的 `password_vault.json` 是 `{format: 4, device, keys, payload: [{id, iv, ct}, …], revision}`——头部（`kdf` / `verifier` / `wrapped` / `keysRevision`）只包一份，**每条记录再单独包一层**由 `core.uuid` 派生的设备层 AES-256-GCM envelope（每次写入随机 nonce，AAD 绑定 `[作用域, 设备指纹, 条目 id]`）。磁盘上明文只留条目 id，分类 / 网站地址 / 备注 / 时间都留在密文里。`password_webauthn.json` 仍是整块 envelope（凭据不需要逐条寻址）。
+- **条目 id 参与 AAD**：把 A 条的密文挪到 B 条的 id 下会直接解密失败，id 不能靠改文件伪造；删一条记录服务端只比对明文 id，不必解开任何条目密文。
+- **设备 UUID 不是硬件绑定**：它是 `.storage/core.uuid` 里的明文字符串，可复制、可从 HA 备份找回、也可在面板里手动指定旧值重新绑定。完整 HA 备份会把它和密文一起打包，因此这一层防的是「密码库文件被单独拿走」，不是「整台 HA 的配置目录泄露」——后者仍由主密码保护。
+- **主密码强度是最后防线**：拿到整包备份的攻击者可以解开设备层、看到内层密文并离线爆破，且离线攻击无法限流。请务必使用足够强的主密码。
+- **已知边界**：面板 JS 由 HA 下发，HA 若被主动控制可注入脚本窃取解锁后的内存明文；XSS、恶意浏览器扩展、已解锁设备被物理接触同理。这些不是静态文件加密能解决的，请保持集成来源可信。
+
+## 使用
+
+1. **解锁**：打开面板输入主密码；解锁后可在「菜单」→「修改主密码」更换（只重包裹 `vaultKey`），已注册的指纹凭据不受影响。刷新页面需重新解锁。
+2. **指纹解锁**：解锁后打开「菜单」→「指纹与凭据」→ 输入设备名 → 注册本设备指纹。之后锁定页会出现「指纹解锁」。换设备需重新注册，凭据可随时撤销。
+3. **新增 / 编辑**：PC 端点顶栏「新增」，窄屏从「菜单」→「新增密码」进入。字段依次是分类、备注、用户名、密码、TOTP 密钥；**网站地址是可选的**（每行一个），放在最后。备注第一行会作为列表显示名。
+4. **查看**：点击条目整行打开只读详情，其中网站地址是可点击链接，会在新页面打开。密码等敏感内容只在解锁后显示。
+5. **删除**：PC 端每行右侧有「编辑 / 删除」，窄屏先点「…」展开。删除与撤销指纹凭据都会先弹出确认框；编辑弹窗里没有删除按钮。
+6. **搜索与分类**：顶栏搜索框按分类、域名、备注查找；左侧分类栏可筛选，窄屏收为抽屉。
+7. **设备与恢复**（仅管理员）：查看/复制当前设备 UUID、当前密码库的设备指纹，以及用旧 UUID 重新绑定。
+8. **多设备同时使用**：两台设备可以同时改**不同**记录——服务端按明文 id 定位、逐条提交，互不覆盖；改**同一条**会提示「该记录已被其它设备修改，请刷新后重试」，删除一条已被别处删掉的记录只提示「该记录已不存在，可能已在其它设备删除」。
+9. **其它**：导出明文备份、导入备份、导入历史数据、空闲 5 分钟自动锁定。
+
+## 备份与恢复
+
+- 「菜单」→「导出备份」生成**明文 JSON 文件**（含用户名、密码、TOTP），请离线保管并尽快删除临时文件。
+- 「菜单」→「导入备份」接受此前导出的明文数组；重复项会当作新条目导入。旧版 3DES 数据请用下面的「导入历史数据」，不要手工转换。
+- **HA 定期备份本身就是加密备份**：它包含 `password_vault.json`（逐条设备层 envelope）、`core.uuid`、`password_webauthn.json`，但不含主密码，可离线保管甚至上云。
+- **同机 / 整机恢复**：还原整个 `.storage` 后用原主密码解锁即可，无需额外操作。
+- **重装 HA、或只还原了密码库文件**（此时 `core.uuid` 已变）：面板会显示「设备 UUID 不匹配」，填入生成这份密码库时的旧 UUID（从 HA 备份的 `.storage/core.uuid`，或添加集成时抄存的值）→ 服务端逐条解开 envelope、用当前 UUID 重新包裹。全程只处理密文，不接触主密码。也可在已解锁时从「菜单」→「设备与恢复」执行。**完成后请重新抄存新的设备 UUID**。
+- **从旧格式（format 3 整块 / 裸 format 2）升级**：本版本把密码库改成「`payload` 数组 + 逐条 envelope」，第一次读取旧文件时服务端**自动迁移**：不需要主密码，原文先另存为 `.storage/password_vault.json.v3.bak`，设备指纹（salt）保持不变、条目 id 原样保留。迁移只是把整块密文拆成逐条重新包裹，旧备份仍可用「旧 UUID + 原主密码」解开；确认新版本工作正常后可以删除 `.v3.bak`。
+- **旧版升级提示**：从 `2026.11.13.14` 及更早版本升级时，会自动清除 config entry 里保存的明文主密码，密码库内容不变、原主密码继续可用；第一次写入时自动加上设备层。**升级前做的旧备份里仍含明文主密码，请妥善处理或销毁。**
+- 若 HA 里已有更早期的测试库（`password_vault.json` 内层不是 format 2），本版本不提供迁移；请先备份，再删除该文件，重新打开面板建库。
+
+## 从旧版（3DES）导入历史数据
+
+旧版（main 分支）把数据存在 `.storage/password.json`：标题、分类、链接是明文，正文用两层 3DES-CBC 加密。解密需要两个条件：**旧主密码**（或旧集成配置里保存的 32 位 md5 密钥）和**生成数据的那台 HA 的 UUID**（`.storage/core.uuid`）。新版不会自动读取该文件，需手动导入一次。
+
+1. 解锁后打开「菜单」→「导入历史数据」。
+2. 选择旧版的 `.storage/password.json`，填写旧主密码；数据来自同一台 HA 时 UUID 留空（自动读取当前 `core.uuid`），换过机器则手动填写旧机器的 UUID。
+3. 点「转换并导入」。服务端解密后把明文交给已解锁的浏览器，前端用当前密码库密钥逐条 AES-GCM 加密并追加保存；旧文件不会被修改或删除。部分条目解密失败时会提示条数，通常是密钥或 UUID 不匹配。
+
+> 这是全流程中**唯一**服务端短暂接触明文的场景（一次性迁移，不落盘、不记日志），因此建议在网络与 HA 管理员账号可信的环境下操作。
+
+字段映射：旧 `title` → 备注（列表显示名）、`text` → 密码（加密字段）、`link` → 网站地址、`date` → 更新时间；旧版没有用户名和 TOTP，导入后留空，可再逐条编辑补充。重复执行导入会产生重复条目，建议先导出备份核对。
 
 ## 注意事项
 
-- 本程序采用`3DES数据加密算法`，以当前HomeAssistant的UUID为`初始化向量IV`，当HomeAssistant存储目录`.storage`丢失后，仅凭密码文件无法解密
+- 用户名、密码、TOTP 始终以密文保存；分类、网站地址、备注在磁盘上也受设备层加密保护（每条记录各自一层 envelope），但服务端运行时需要逐条解开保证读写，因此**对 HA 管理员可见**——零知识覆盖的是主密码与敏感字段，不是全字段。
+- 设备 UUID 相当于恢复码，请与密码库备份、HA 备份**分开保存**；它泄露不等于数据泄露，但会让攻击者拿到内层密文的离线爆破入口。
+- 指纹解锁只在注册过的本设备有效，凭据可随时在「指纹与凭据」中撤销。
+- 通过接口的写入始终为该条记录生成独立的设备层 envelope（新 IV、AAD 绑定条目 id）；但**文件系统级的整体回滚**（攻击者能直接替换 `.storage` 文件为更早的备份）未做单调性防护，需要另行保护配置目录的写权限。
 
-- 请保存初始显示UUID，如果设备意外损坏，可通过`UUID、自定义密钥`这两个重要的关键信息解密
+## 发布
 
-- 如果忘记`UUID、自定义密钥`，信息基本是找不回来了
+版本号以 `custom_components/password/manifest.json` 的 `version` 为准。它同时是 `STATIC_URL` 的一部分（前端模块靠它换掉浏览器缓存），所以**每次改前端都必须 bump**。
 
-- HomeAssistant里的存储文件位置`.storage/password.json`，请勿手动修改
+发版流程：
 
-## 引用项目
+1. 把 `manifest.json` 的 `version` 改成目标版本；
+2. `git tag v2026.11.16.6`（tag 必须等于 `v` + manifest 版本）；
+3. `git push origin <分支> --tags`。
 
-- https://github.com/material-components/material-web
+推送 tag 会触发 `.github/workflows/release.yml`：先跑 hassfest 与 HACS 两套校验，通过后核对「tag = v + manifest version」，再打包 `password.zip`（保留完整 `custom_components/password/` 路径、排除 `__pycache__` / `.pyc`）并创建 Release。版本对不上会直接失败——市场靠 Release 判断更新，tag 与 manifest 不一致会让用户收不到新版本。
+
+日常提交与 PR 走 `.github/workflows/validate.yml`：hassfest + HACS 校验，外加每周一次定时重跑，防止上游规则变化后仓库悄悄失效（例如 `categories` 取值改名）。
+
+集成的市场分类在 `manifest.json` 的 `categories`（HA 2026.10 起），当前归入 `security_safety.locks_access`；HACS 校验对缺失的 `categories` 只 warn，对非法取值 fail。
+

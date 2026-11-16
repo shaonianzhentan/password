@@ -1,86 +1,54 @@
+"""配置流：单实例，只收集访问限制；主密码由前端首次打开面板时设置。
+
+明文主密码只存在于浏览器内存，config entry 不保存任何密码材料。
+表单里显示当前 core.uuid，提示用户单独抄存，作为设备层的恢复凭据。
+"""
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
+
 import voluptuous as vol
 
+from homeassistant.config_entries import ConfigFlow
 from homeassistant.data_entry_flow import FlowResult
-from homeassistant.core import callback
-from homeassistant.config_entries import ConfigFlow, OptionsFlow, ConfigEntry
 
-from .EncryptHelper import EncryptHelper, md5
+from . import device
 from .manifest import manifest
-from .storage import StorageData
-
-sd = StorageData('password')
 
 DOMAIN = manifest.domain
-DATA_SCHEMA = vol.Schema({
-    vol.Required("key"): str,
-    vol.Required("require_admin", default=True): bool
-})
 
-class SimpleConfigFlow(ConfigFlow, domain=DOMAIN):
 
-    VERSION = 1
+def _schema() -> vol.Schema:
+    return vol.Schema({
+        vol.Required('require_admin', default=True): bool,
+    })
+
+
+class PasswordConfigFlow(ConfigFlow, domain=DOMAIN):
+
+    VERSION = 3
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Handle the initial step."""
         if self._async_current_entries():
-            return self.async_abort(reason="single_instance_allowed")
+            return self.async_abort(reason='single_instance_allowed')
 
         if user_input is None:
-            return self.async_show_form(step_id="user", data_schema=DATA_SCHEMA)
-
-        user_input['key'] = md5(user_input['key'])
-        return self.async_create_entry(title=DOMAIN, data=user_input)
-
-    @staticmethod
-    @callback
-    def async_get_options_flow(entry: ConfigEntry):
-        return OptionsFlowHandler(entry)
-
-
-class OptionsFlowHandler(OptionsFlow):
-    def __init__(self, config_entry: ConfigEntry):
-        self.config_entry = config_entry
-
-    async def async_step_init(self, user_input=None):
-        return await self.async_step_user(user_input)
-
-    async def async_step_user(self, user_input=None):
-        MAC_KEY = await sd.get_uuid()
-        errors = {}
-        if user_input is None:
-            options = self.config_entry.options
-            errors = {}
-            DATA_SCHEMA = vol.Schema({
-                vol.Required("mac_key", default=MAC_KEY): str
-            })
-            return self.async_show_form(step_id="user", data_schema=DATA_SCHEMA, errors=errors)
-        # 选项更新
-        mac_key = user_input['mac_key']
-        if mac_key != MAC_KEY:
-            server_key = self.hass.data.get(f'{manifest.domain}-key')
             try:
-                helper = EncryptHelper(server_key, MAC_KEY)
-                _helper = EncryptHelper(server_key, mac_key)
-                _list = sd.load()
-                for item in _list:
-                    # 原始MAC解密
-                    _key = _helper.Decrypt(item['key'])
-                    # 本地MAC加密
-                    item['key'] = helper.Encrypt(_key)
-                sd.save(_list)
-            except Exception as ex:
-                print(ex)
-                DATA_SCHEMA = vol.Schema({
-                    vol.Required("mac_key", default=mac_key): str
-                })
-                return self.async_show_form(step_id="user", data_schema=DATA_SCHEMA, errors={
-                    'base': 'decrypt'
-                })
+                uuid_text = await self.hass.async_add_executor_job(
+                    device.read_uuid,
+                    Path(self.hass.config.path('.storage', 'core.uuid')),
+                )
+            except device.DeviceError:
+                uuid_text = '（未能读取，请确认 HomeAssistant 已正常启动）'
+            return self.async_show_form(
+                step_id='user',
+                data_schema=_schema(),
+                description_placeholders={'uuid': uuid_text},
+            )
 
-        del user_input['mac_key']
-        return self.async_create_entry(title='', data=user_input)
+        return self.async_create_entry(title=manifest.name, data={
+            'require_admin': bool(user_input.get('require_admin', True)),
+        })
